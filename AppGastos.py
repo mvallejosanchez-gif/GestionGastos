@@ -667,6 +667,7 @@ def api_dashboard():
     selected_categories = {level: value for level, value in selected_categories.items() if value}
 
     conn = get_db()
+    ensure_account_balance_flag(conn)
     date_min = conn.execute(
         'SELECT MIN(date(COALESCE(f_valor, fecha))) AS min_date FROM movimientos'
     ).fetchone()['min_date']
@@ -699,13 +700,16 @@ def api_dashboard():
         ).fetchall()
         totals_by_category[level] = [dict(row) for row in rows]
 
-    cuentas_query = 'SELECT fuente, disponible_cero, ahorro_no_disponible_cent FROM cuentas'
+    cuentas_query = '''
+        SELECT fuente, disponible_cero, ahorro_no_disponible_cent
+        FROM cuentas WHERE incluir_en_saldos = 1
+    '''
     if sin_fuentes:
         cuentas = []
     elif fuentes_seleccionadas:
         placeholders = ', '.join('?' for _ in fuentes_seleccionadas)
         cuentas = conn.execute(
-            f'{cuentas_query} WHERE fuente IN ({placeholders}) ORDER BY fuente COLLATE NOCASE ASC',
+            f'{cuentas_query} AND fuente IN ({placeholders}) ORDER BY fuente COLLATE NOCASE ASC',
             fuentes_seleccionadas,
         ).fetchall()
     else:

@@ -129,6 +129,48 @@ class GastosAppTests(unittest.TestCase):
         self.assertIn('date_end', payload)
         self.assertIn('total_general', payload)
 
+    def test_dashboard_total_excludes_accounts_not_in_balance_totals(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'gastos.db'
+            conn = sqlite3.connect(db_path)
+            schema_sql = Path(__file__).resolve().parent / 'schema.sql'
+            conn.executescript(schema_sql.read_text(encoding='utf-8'))
+            conn.execute(
+                'INSERT INTO cuentas (fuente, contabilidad2) VALUES (?, ?)',
+                ('AMAZON', 'BANCO'),
+            )
+            conn.execute(
+                '''
+                INSERT INTO movimientos (
+                    fuente, f_valor, fecha, concepto, movimiento, importe_cent,
+                    divisa, disponible_cent, categoria2, clave
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''',
+                (
+                    'AMAZON', '2026-10-18', '2026-10-18', 'Snapshot Amazon',
+                    'Movimiento', 0, 'EUR', 28331, 'PENDIENTE', 'amazon-snapshot',
+                ),
+            )
+            conn.commit()
+            conn.close()
+
+            with patch('AppGastos.DB_PATH', db_path):
+                config_response = self.client.get('/api/config/cuentas')
+                self.assertEqual(config_response.status_code, 200)
+
+                conn = sqlite3.connect(db_path)
+                conn.execute(
+                    'UPDATE cuentas SET incluir_en_saldos = 0 WHERE fuente = ?',
+                    ('AMAZON',),
+                )
+                conn.commit()
+                conn.close()
+
+                response = self.client.get('/api/dashboard?fuentes=AMAZON')
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()['total_general'], 0)
+
     def test_dashboard_movements_apply_same_source_date_and_category_filters(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / 'gastos.db'
