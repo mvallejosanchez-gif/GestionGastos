@@ -2,6 +2,7 @@ import sqlite3
 import tempfile
 import unittest
 import json
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
@@ -170,6 +171,59 @@ class GastosAppTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.get_json()['total_general'], 0)
+
+    def test_dashboard_saldos_can_select_a_previous_month(self):
+        class FixedDate(date):
+            @classmethod
+            def today(cls):
+                return cls(2026, 3, 10)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'gastos.db'
+            conn = sqlite3.connect(db_path)
+            schema_sql = Path(__file__).resolve().parent / 'schema.sql'
+            conn.executescript(schema_sql.read_text(encoding='utf-8'))
+            conn.execute(
+                'INSERT INTO cuentas (fuente, contabilidad2) VALUES (?, ?)',
+                ('BBVA', 'BANCO'),
+            )
+            conn.execute(
+                'CREATE TABLE app_config (clave TEXT PRIMARY KEY, valor TEXT NOT NULL)'
+            )
+            conn.execute(
+                'INSERT INTO app_config (clave, valor) VALUES (?, ?)',
+                ('meses_saldo_historico', '2'),
+            )
+            for movement_date, balance, key in (
+                ('2026-01-01', 10000, 'january-snapshot'),
+                ('2026-02-10', 15000, 'february-snapshot'),
+            ):
+                conn.execute(
+                    '''
+                    INSERT INTO movimientos (
+                        fuente, f_valor, fecha, concepto, movimiento, importe_cent,
+                        divisa, disponible_cent, categoria2, clave
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        'BBVA', movement_date, movement_date, 'Saldo', 'Snapshot',
+                        0, 'EUR', balance, 'PENDIENTE', key,
+                    ),
+                )
+            conn.commit()
+            conn.close()
+
+            with patch('AppGastos.DB_PATH', db_path), patch('AppGastos.date', FixedDate):
+                response = self.client.get('/api/dashboard/saldos?month=2026-02')
+                invalid_response = self.client.get('/api/dashboard/saldos?month=2025-12')
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertEqual(payload['month'], '2026-02')
+            self.assertEqual(payload['available_months'], ['2026-03', '2026-02', '2026-01'])
+            self.assertEqual(payload['actual'][9], 15000)
+            self.assertEqual(payload['average'][9], 10000)
+            self.assertEqual(invalid_response.status_code, 400)
 
     def test_dashboard_movements_apply_same_source_date_and_category_filters(self):
         with tempfile.TemporaryDirectory() as tmpdir:

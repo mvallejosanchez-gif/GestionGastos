@@ -20,10 +20,10 @@ MONTHLY_BUDGETS_CENTS = {
     'Mantenimiento Casa': 3000,
     'Prestamo': 69800,
     'Agua': 2500,
-    'Comunidad': 9330,
+    'Comunidad': 10060,
     'Telefonia': 3520,
     'Energía': 5000,
-    'Suscripciones': 2098,
+    'Suscripciones': 2100,
     'Supermercado': 50000,
     'Comida a Domicilio': 6000,
     'Loteria': 1500,
@@ -1058,9 +1058,39 @@ def api_dashboard_saldos():
     months = get_balance_history_months(conn)
     today = date.today()
     current_month = today.replace(day=1)
-    start_month_index = current_month.year * 12 + current_month.month - 1 - months
+    current_month_index = current_month.year * 12 + current_month.month - 1
+    earliest_month_index = current_month_index - months
+    requested_month = request.args.get('month', '').strip()
+    if requested_month:
+        try:
+            selected_year, selected_month_number = map(int, requested_month.split('-'))
+            selected_month = date(selected_year, selected_month_number, 1)
+            if selected_month.strftime('%Y-%m') != requested_month:
+                raise ValueError
+        except ValueError:
+            conn.close()
+            return jsonify({'error': 'El mes seleccionado no es válido'}), 400
+    else:
+        selected_month = current_month
+
+    selected_month_index = selected_month.year * 12 + selected_month.month - 1
+    if not earliest_month_index <= selected_month_index <= current_month_index:
+        conn.close()
+        return jsonify({'error': 'El mes seleccionado está fuera del histórico configurado'}), 400
+
+    start_month_index = selected_month_index - months
     start_year, start_month_zero = divmod(start_month_index, 12)
     history_start = date(start_year, start_month_zero + 1, 1)
+    selected_month_end = min(
+        selected_month.replace(
+            day=calendar.monthrange(selected_month.year, selected_month.month)[1]
+        ),
+        today,
+    )
+    available_months = []
+    for offset in range(months + 1):
+        year, month_zero = divmod(current_month_index - offset, 12)
+        available_months.append(f'{year:04d}-{month_zero + 1:02d}')
 
     if sin_fuentes:
         accounts = []
@@ -1086,7 +1116,7 @@ def api_dashboard_saldos():
         if account['disponible_cero']:
             account_balances[fuente] = {
                 history_start + timedelta(days=offset): 0
-                for offset in range((today - history_start).days + 1)
+                for offset in range((selected_month_end - history_start).days + 1)
             }
             continue
 
@@ -1113,7 +1143,7 @@ def api_dashboard_saldos():
                   AND date(COALESCE(f_valor, fecha)) <= ?
                 ORDER BY datetime(COALESCE(f_valor, fecha)), id
                 ''',
-                (fuente, history_start.isoformat(), today.isoformat()),
+                (fuente, history_start.isoformat(), selected_month_end.isoformat()),
             ).fetchall()
         else:
             balance = int(baseline['disponible_cent'])
@@ -1126,7 +1156,7 @@ def api_dashboard_saldos():
                   AND date(COALESCE(f_valor, fecha)) <= ?
                 ORDER BY datetime(COALESCE(f_valor, fecha)), id
                 ''',
-                (fuente, baseline['instante'], today.isoformat()),
+                (fuente, baseline['instante'], selected_month_end.isoformat()),
             ).fetchall()
 
         events_by_day = {}
@@ -1141,7 +1171,7 @@ def api_dashboard_saldos():
                 events_by_day.setdefault(event_day, []).append(event)
 
         daily_balances = {}
-        for offset in range((today - history_start).days + 1):
+        for offset in range((selected_month_end - history_start).days + 1):
             day = history_start + timedelta(days=offset)
             for event in events_by_day.get(day, []):
                 if event['disponible_cent'] is not None:
@@ -1156,7 +1186,7 @@ def api_dashboard_saldos():
         account_balances[fuente] = daily_balances
 
     aggregate_by_day = {}
-    for offset in range((today - history_start).days + 1):
+    for offset in range((selected_month_end - history_start).days + 1):
         day = history_start + timedelta(days=offset)
         values = [
             balances[day]
@@ -1167,7 +1197,7 @@ def api_dashboard_saldos():
 
     historical_by_day = {day: [] for day in range(1, 32)}
     for month_offset in range(1, months + 1):
-        month_index = current_month.year * 12 + current_month.month - 1 - month_offset
+        month_index = selected_month_index - month_offset
         year, month_zero = divmod(month_index, 12)
         month_number = month_zero + 1
         for day_number in range(1, calendar.monthrange(year, month_number)[1] + 1):
@@ -1179,10 +1209,10 @@ def api_dashboard_saldos():
                 })
 
     days = list(range(1, 32))
-    current_month_length = calendar.monthrange(today.year, today.month)[1]
+    selected_month_length = calendar.monthrange(selected_month.year, selected_month.month)[1]
     actual = [
-        aggregate_by_day.get(date(today.year, today.month, day_number))
-        if day_number <= min(today.day, current_month_length)
+        aggregate_by_day.get(date(selected_month.year, selected_month.month, day_number))
+        if day_number <= min(selected_month_end.day, selected_month_length)
         else None
         for day_number in days
     ]
@@ -1220,9 +1250,10 @@ def api_dashboard_saldos():
     )
 
     conn.close()
-    previous_month_end = current_month - timedelta(days=1)
+    previous_month_end = selected_month - timedelta(days=1)
     return jsonify({
-        'month': current_month.strftime('%Y-%m'),
+        'month': selected_month.strftime('%Y-%m'),
+        'available_months': available_months,
         'months_history': months,
         'history_start': history_start.isoformat(),
         'history_end': previous_month_end.isoformat(),

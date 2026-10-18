@@ -879,6 +879,17 @@ tbody tr:hover {
   margin: 0;
 }
 
+.balance-month-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.balance-month-filter select {
+  min-width: 170px;
+}
+
 .balance-chart-wrap {
   position: relative;
   width: 100%;

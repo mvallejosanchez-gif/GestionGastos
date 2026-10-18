@@ -221,6 +221,10 @@
         <section class="panel table-panel">
           <div class="balance-history-header">
             <h2>Saldo diario</h2>
+            <label class="balance-month-filter" for="balanceMonthSelect">
+              <span>Mes</span>
+              <select id="balanceMonthSelect" aria-label="Mes de saldos"></select>
+            </label>
             <span id="balanceChartSummary" class="muted"></span>
           </div>
           <div class="balance-chart-wrap" id="balanceChartWrap">
@@ -233,7 +237,7 @@
               <thead>
                 <tr>
                   <th>Día</th>
-                  <th class="text-right">Mes actual</th>
+                  <th class="text-right">Mes seleccionado</th>
                   <th class="text-right">Saldo medio</th>
                   <th class="text-right">Saldo mínimo</th>
                   <th>Fecha mínimo</th>

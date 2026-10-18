@@ -87,6 +87,7 @@ const balanceChartTooltip = document.getElementById('balanceChartTooltip');
 const balanceChartSummary = document.getElementById('balanceChartSummary');
 const balanceChartLegend = document.getElementById('balanceChartLegend');
 const balanceHistoryRows = document.getElementById('balanceHistoryRows');
+const balanceMonthSelect = document.getElementById('balanceMonthSelect');
 const dashboardCategoryVisuals = document.getElementById('dashboardVisuals');
 const clearDashboardCategoryFilter = document.getElementById('clearDashboardCategoryFilter');
 const dashboardCategoryLevels = ['categoria0', 'categoria1', 'categoria2'];
@@ -323,6 +324,13 @@ function formatDateValue(value) {
   const date = new Date(`${value}T00:00:00`);
   if (Number.isNaN(date.getTime())) return value;
   return date.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+function formatMonthValue(value) {
+  if (!value) return '—';
+  const month = new Date(`${value}-01T00:00:00`);
+  if (Number.isNaN(month.getTime())) return value;
+  return month.toLocaleDateString('es-ES', { month: 'long', year: 'numeric' });
 }
 
 function formatShortDate(value) {
@@ -599,8 +607,17 @@ function renderBalanceChart(data) {
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
   const days = data.days || Array.from({ length: 31 }, (_, index) => index + 1);
+  const availableMonths = data.available_months || [data.month].filter(Boolean);
+  balanceMonthSelect.replaceChildren();
+  availableMonths.forEach((month) => {
+    const option = document.createElement('option');
+    option.value = month;
+    option.textContent = formatMonthValue(month);
+    option.selected = month === data.month;
+    balanceMonthSelect.appendChild(option);
+  });
   const series = [
-    { key: 'actual', label: 'Mes actual', color: '#f26b38' },
+    { key: 'actual', label: 'Mes seleccionado', color: '#f26b38' },
     { key: 'average', label: 'Saldo medio', color: '#176789' },
     { key: 'minimum', dateKey: 'minimum_date', label: 'Saldo mínimo', color: '#247a35' },
     { key: 'maximum', dateKey: 'maximum_date', label: 'Saldo máximo', color: '#079bd3' },
@@ -615,7 +632,7 @@ function renderBalanceChart(data) {
       'text-anchor': 'middle',
       class: 'balance-empty-label',
     }, 'Sin saldos disponibles para las cuentas seleccionadas'));
-    balanceChartSummary.textContent = `Histórico: ${data.months_history} meses anteriores`;
+    balanceChartSummary.textContent = `${formatMonthValue(data.month)} · histórico de ${data.months_history} meses anteriores`;
     balanceChartLegend.replaceChildren();
     balanceHistoryRows.innerHTML = '<tr><td colspan="7" class="empty">No hay datos de saldo para mostrar.</td></tr>';
     return;
@@ -753,7 +770,7 @@ function renderBalanceChart(data) {
   });
   applyDefaultTableSort(balanceHistoryRows);
 
-  const monthLabel = data.month ? formatDateValue(`${data.month}-01`) : '';
+  const monthLabel = formatMonthValue(data.month);
   balanceChartSummary.textContent = `${monthLabel} · media, mínimo y máximo de los ${data.months_history} meses anteriores, desde el ${formatShortDate(data.first_date || data.history_start)}`;
   balanceChartLegend.replaceChildren();
   series.forEach((item) => {
@@ -1239,6 +1256,9 @@ dashboardMovementsNext.addEventListener('click', () => {
 
 async function loadBalanceHistoryChart() {
   const balanceParams = new URLSearchParams();
+  if (balanceMonthSelect.value) {
+    balanceParams.set('month', balanceMonthSelect.value);
+  }
   if (selectedBanks !== null) {
     if (selectedBanks.length) {
       balanceParams.set('fuentes', selectedBanks.join(','));
@@ -1249,6 +1269,8 @@ async function loadBalanceHistoryChart() {
   const balanceData = await fetchJson(`/api/dashboard/saldos?${balanceParams.toString()}`);
   renderBalanceChart(balanceData);
 }
+
+balanceMonthSelect.addEventListener('change', loadBalanceHistoryChart);
 
 async function loadMovimientos() {
   const params = new URLSearchParams({
@@ -1376,6 +1398,7 @@ balanceHistoryMonthsInput.addEventListener('change', async () => {
     });
     savedBalanceHistoryMonths = String(result.meses_saldo_historico);
     balanceHistoryMonthsInput.value = savedBalanceHistoryMonths;
+    balanceMonthSelect.value = '';
     balanceHistoryConfigStatus.textContent = `Histórico actualizado: ${result.meses_saldo_historico} meses.`;
   } catch (error) {
     balanceHistoryMonthsInput.value = savedBalanceHistoryMonths;
