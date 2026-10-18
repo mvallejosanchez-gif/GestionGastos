@@ -679,27 +679,9 @@ def api_dashboard():
     if date_end is None:
         date_end = date_max
 
-    where_clauses = []
-    params = []
-    if sin_fuentes:
-        where_clauses.append('1 = 0')
-    elif fuentes_seleccionadas:
-        placeholders = ', '.join('?' for _ in fuentes_seleccionadas)
-        where_clauses.append(f'm.fuente IN ({placeholders})')
-        params.extend(fuentes_seleccionadas)
-    if date_start:
-        where_clauses.append('date(COALESCE(m.f_valor, m.fecha)) >= date(?)')
-        params.append(date_start)
-    if date_end:
-        where_clauses.append('date(COALESCE(m.f_valor, m.fecha)) <= date(?)')
-        params.append(date_end)
-    for level, value in selected_categories.items():
-        where_clauses.append(f'c.{level} = ?')
-        params.append(value)
-
-    sql_where = ''
-    if where_clauses:
-        sql_where = ' WHERE ' + ' AND '.join(where_clauses)
+    sql_where, params = build_dashboard_movement_filters(
+        fuentes_seleccionadas, sin_fuentes, date_start, date_end, selected_categories
+    )
 
     totals_by_category = {}
     for level in ('categoria0', 'categoria1', 'categoria2'):
@@ -711,7 +693,7 @@ def api_dashboard():
             LEFT JOIN categorias c ON c.categoria2 = m.categoria2
             {sql_where}
             GROUP BY COALESCE(c.{level}, '(blank)')
-            ORDER BY total_cent DESC
+            ORDER BY ABS(total_cent) DESC
             ''',
             params,
         ).fetchall()
@@ -744,7 +726,7 @@ def api_dashboard():
         if date_end:
             snapshot_sql += ' AND date(COALESCE(f_valor, fecha)) <= date(?)'
             snapshot_params.append(date_end)
-        snapshot_sql += ' ORDER BY datetime(COALESCE(f_valor, fecha)) DESC, id DESC LIMIT 1'
+        snapshot_sql += ' ORDER BY datetime(COALESCE(f_valor, fecha)) DESC, id ASC LIMIT 1'
         snapshot = conn.execute(snapshot_sql, snapshot_params).fetchone()
 
         if snapshot is not None:
@@ -797,6 +779,97 @@ def api_dashboard():
         'totales_por_categoria0': totals_by_category['categoria0'],
         'totales_por_categoria1': totals_by_category['categoria1'],
         'totales_por_categoria2': totals_by_category['categoria2'],
+    })
+
+
+def build_dashboard_movement_filters(
+    fuentes_seleccionadas: list[str],
+    sin_fuentes: bool,
+    date_start: str | None,
+    date_end: str | None,
+    selected_categories: dict[str, str],
+) -> tuple[str, list]:
+    where_clauses = []
+    params = []
+    if sin_fuentes:
+        where_clauses.append('1 = 0')
+    elif fuentes_seleccionadas:
+        placeholders = ', '.join('?' for _ in fuentes_seleccionadas)
+        where_clauses.append(f'm.fuente IN ({placeholders})')
+        params.extend(fuentes_seleccionadas)
+    if date_start:
+        where_clauses.append('date(COALESCE(m.f_valor, m.fecha)) >= date(?)')
+        params.append(date_start)
+    if date_end:
+        where_clauses.append('date(COALESCE(m.f_valor, m.fecha)) <= date(?)')
+        params.append(date_end)
+    for level, value in selected_categories.items():
+        where_clauses.append(f"COALESCE(c.{level}, '(blank)') = ?")
+        params.append(value)
+
+    sql_where = ' WHERE ' + ' AND '.join(where_clauses) if where_clauses else ''
+    return sql_where, params
+
+
+@app.get('/api/dashboard/movimientos')
+def api_dashboard_movimientos():
+    raw_fuentes = request.args.getlist('fuentes')
+    fuentes_seleccionadas = list(dict.fromkeys(
+        item.strip()
+        for value in raw_fuentes
+        for item in value.split(',')
+        if item.strip()
+    ))
+    sin_fuentes = request.args.get('sin_fuentes') == '1'
+    selected_categories = {
+        level: request.args.get(level, '').strip()
+        for level in ('categoria0', 'categoria1', 'categoria2')
+    }
+    selected_categories = {level: value for level, value in selected_categories.items() if value}
+
+    conn = get_db()
+    date_start = request.args.get('date_start', '').strip() or conn.execute(
+        'SELECT MIN(date(COALESCE(f_valor, fecha))) FROM movimientos'
+    ).fetchone()[0]
+    date_end = request.args.get('date_end', '').strip() or conn.execute(
+        'SELECT MAX(date(COALESCE(f_valor, fecha))) FROM movimientos'
+    ).fetchone()[0]
+    sql_where, params = build_dashboard_movement_filters(
+        fuentes_seleccionadas, sin_fuentes, date_start, date_end, selected_categories
+    )
+
+    page = max(1, int(request.args.get('page', 1)))
+    limit = 50
+    total = conn.execute(
+        f'''
+        SELECT COUNT(*)
+        FROM movimientos m
+        LEFT JOIN categorias c ON c.categoria2 = m.categoria2
+        {sql_where}
+        ''',
+        params,
+    ).fetchone()[0]
+    pages = max(1, (total + limit - 1) // limit)
+    page = min(page, pages)
+    rows = conn.execute(
+        f'''
+        SELECT m.f_valor, m.fecha, m.fuente, m.concepto, m.movimiento,
+               m.importe_cent, c.categoria2
+        FROM movimientos m
+        LEFT JOIN categorias c ON c.categoria2 = m.categoria2
+        {sql_where}
+        ORDER BY datetime(COALESCE(m.f_valor, m.fecha)) DESC, m.id DESC
+        LIMIT ? OFFSET ?
+        ''',
+        params + [limit, (page - 1) * limit],
+    ).fetchall()
+    conn.close()
+    return jsonify({
+        'items': [dict(row) for row in rows],
+        'total': total,
+        'page': page,
+        'pages': pages,
+        'limit': limit,
     })
 
 

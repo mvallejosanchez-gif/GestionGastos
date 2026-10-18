@@ -113,8 +113,15 @@ const dateEndSlider = document.getElementById('dateEndSlider');
 const clearDashboardDateFilter = document.getElementById('clearDashboardDateFilter');
 const dateRangeStartText = document.getElementById('dateRangeStartText');
 const dateRangeEndText = document.getElementById('dateRangeEndText');
+const dashboardMovementsSummary = document.getElementById('dashboardMovementsSummary');
+const dashboardMovementsRows = document.getElementById('dashboardMovementsRows');
+const dashboardMovementsPageLabel = document.getElementById('dashboardMovementsPage');
+const dashboardMovementsPrevious = document.getElementById('dashboardMovementsPrevious');
+const dashboardMovementsNext = document.getElementById('dashboardMovementsNext');
 
 let selectedBanks = null;
+let dashboardMovementsPage = 1;
+let dashboardFilterKey = null;
 let selectedDashboardCategories = {
   categoria0: null,
   categoria1: null,
@@ -532,6 +539,47 @@ function renderDashboard(data) {
   });
 }
 
+function renderDashboardMovements(data) {
+  const items = data.items || [];
+  dashboardMovementsRows.replaceChildren();
+  if (!items.length) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 6;
+    cell.className = 'empty';
+    cell.textContent = 'No hay movimientos para los filtros seleccionados.';
+    row.appendChild(cell);
+    dashboardMovementsRows.appendChild(row);
+  } else {
+    items.forEach((item) => {
+      const row = document.createElement('tr');
+      [
+        formatShortDate(item.f_valor || item.fecha),
+        item.fuente || '—',
+        item.concepto || '—',
+        item.movimiento || '—',
+        item.categoria2 || '(blank)',
+      ].forEach((value) => {
+        const cell = document.createElement('td');
+        cell.textContent = value;
+        row.appendChild(cell);
+      });
+      const amount = document.createElement('td');
+      amount.className = 'money-cell';
+      amount.textContent = formatMoneyFromCents(item.importe_cent);
+      row.appendChild(amount);
+      dashboardMovementsRows.appendChild(row);
+    });
+  }
+
+  const pages = Number(data.pages || 1);
+  const page = Number(data.page || 1);
+  dashboardMovementsSummary.textContent = `${data.total} movimientos · ${page}/${pages}`;
+  dashboardMovementsPageLabel.textContent = `Página ${page} de ${pages}`;
+  dashboardMovementsPrevious.disabled = page <= 1;
+  dashboardMovementsNext.disabled = page >= pages;
+}
+
 function createBalanceSvgElement(name, attributes = {}, text = null) {
   const element = document.createElementNS('http://www.w3.org/2000/svg', name);
   Object.entries(attributes).forEach(([key, value]) => element.setAttribute(key, value));
@@ -786,7 +834,7 @@ function renderImportPreviewRows(rows, filesCount = 0, targetBody = importPrevie
         <tr>
           ${isImportTab ? `<td class="selection-cell"><input class="import-row-checkbox" type="checkbox" data-import-key="${row.clave}" aria-label="Seleccionar ${row.concepto || row.fuente || 'registro'}" ${selectedImportKeys.has(row.clave) ? 'checked' : ''} /></td>` : ''}
           <td>${row.fuente || '—'}</td>
-          <td>${row.source_file || row.fuente || 'input'}</td>
+          <td>${row.update_snapshot ? 'Actualizar saldo · ' : ''}${row.source_file || row.fuente || 'input'}</td>
           <td>${formatShortDate(row.f_valor || row.fecha)}</td>
           <td>${row.concepto || '—'}</td>
           <td>${row.movimiento || '—'}</td>
@@ -909,8 +957,9 @@ async function confirmImportAndRefresh() {
     await loadImportPreview();
     if (importStatusText) {
       const inserted = Number(result?.inserted || 0);
-      importStatusText.textContent = inserted > 0
-        ? `Importación completada: ${inserted} de ${selectedCount} seleccionados añadidos a la base de datos.`
+      const updated = Number(result?.updated || 0);
+      importStatusText.textContent = inserted > 0 || updated > 0
+        ? `Importación completada: ${inserted} añadidos y ${updated} saldos actualizados de ${selectedCount} seleccionados.`
         : `No se ha importado ningún registro de los ${selectedCount} seleccionados.`;
     }
   } catch (error) {
@@ -1133,7 +1182,7 @@ if (clearDashboardDateFilter) {
   });
 }
 
-async function loadDashboard() {
+function buildDashboardFilterParams() {
   const params = new URLSearchParams();
   if (selectedBanks !== null) {
     if (selectedBanks.length) {
@@ -1153,9 +1202,40 @@ async function loadDashboard() {
       params.set(level, selectedDashboardCategories[level]);
     }
   });
-  const data = await fetchJson(`/api/dashboard?${params.toString()}`);
-  renderDashboard(data);
+  return params;
 }
+
+async function loadDashboard(requestedMovementsPage = null) {
+  const params = buildDashboardFilterParams();
+  const filterKey = params.toString();
+  if (dashboardFilterKey !== filterKey) {
+    dashboardFilterKey = filterKey;
+    dashboardMovementsPage = 1;
+  }
+  if (requestedMovementsPage !== null) {
+    dashboardMovementsPage = requestedMovementsPage;
+  }
+
+  const dashboardData = await fetchJson(`/api/dashboard?${params.toString()}`);
+  renderDashboard(dashboardData);
+  params.set('page', String(dashboardMovementsPage));
+  try {
+    const movementsData = await fetchJson(`/api/dashboard/movimientos?${params.toString()}`);
+    dashboardMovementsPage = movementsData.page;
+    renderDashboardMovements(movementsData);
+  } catch (error) {
+    dashboardMovementsSummary.textContent = error.message;
+    dashboardMovementsRows.innerHTML = '<tr><td colspan="6" class="empty">No se pudieron cargar los movimientos.</td></tr>';
+  }
+}
+
+dashboardMovementsPrevious.addEventListener('click', () => {
+  if (dashboardMovementsPage > 1) loadDashboard(dashboardMovementsPage - 1);
+});
+
+dashboardMovementsNext.addEventListener('click', () => {
+  loadDashboard(dashboardMovementsPage + 1);
+});
 
 async function loadBalanceHistoryChart() {
   const balanceParams = new URLSearchParams();

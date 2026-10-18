@@ -185,6 +185,35 @@
               </table>
             </section>
           </div>
+
+          <section class="dashboard-movements">
+            <div class="dashboard-movements-header">
+              <h2>Movimientos del periodo</h2>
+              <span id="dashboardMovementsSummary" class="muted">Cargando movimientos…</span>
+            </div>
+            <div class="table-wrap">
+              <table class="dashboard-movements-table">
+                <thead>
+                  <tr>
+                    <th>Fecha</th>
+                    <th>Fuente</th>
+                    <th>Concepto</th>
+                    <th>Movimiento</th>
+                    <th>Categoría</th>
+                    <th class="text-right">Importe</th>
+                  </tr>
+                </thead>
+                <tbody id="dashboardMovementsRows">
+                  <tr><td colspan="6" class="empty">Cargando movimientos…</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="pagination dashboard-movements-pagination">
+              <button id="dashboardMovementsPrevious" class="secondary" type="button" disabled>Anterior</button>
+              <span id="dashboardMovementsPage" class="muted">Página 1 de 1</span>
+              <button id="dashboardMovementsNext" class="secondary" type="button" disabled>Siguiente</button>
+            </div>
+          </section>
         </div>
       </section>
 

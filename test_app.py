@@ -5,8 +5,18 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
+
 from AppGastos import app, DB_PATH
-from importar_input import import_files, parse_revolut_csv, parse_trade_republic_csv, preview_import_files
+from importar_input import (
+    import_files,
+    insert_rows,
+    parse_bbva_xlsx,
+    parse_bankinter_xlsx,
+    parse_revolut_csv,
+    parse_trade_republic_csv,
+    preview_import_files,
+)
 
 
 class GastosAppTests(unittest.TestCase):
@@ -119,6 +129,54 @@ class GastosAppTests(unittest.TestCase):
         self.assertIn('date_end', payload)
         self.assertIn('total_general', payload)
 
+    def test_dashboard_movements_apply_same_source_date_and_category_filters(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'gastos.db'
+            conn = sqlite3.connect(db_path)
+            schema_sql = Path(__file__).resolve().parent / 'schema.sql'
+            conn.executescript(schema_sql.read_text(encoding='utf-8'))
+            conn.execute(
+                'INSERT INTO categorias (categoria2, categoria1, categoria0) VALUES (?, ?, ?)',
+                ('Supermercado', 'Casa', 'Hogar'),
+            )
+            conn.execute(
+                'INSERT INTO categorias (categoria2, categoria1, categoria0) VALUES (?, ?, ?)',
+                ('Combustible', 'Coche', 'Transporte'),
+            )
+            for source in ('BBVA', 'BANKINTER'):
+                conn.execute(
+                    'INSERT INTO cuentas (fuente, contabilidad2) VALUES (?, ?)',
+                    (source, 'BANCO'),
+                )
+            movements = [
+                ('BBVA', '2026-10-10', 'Compra de comida', -2500, 'Supermercado'),
+                ('BANKINTER', '2026-10-10', 'Gasolina', -3000, 'Combustible'),
+                ('BBVA', '2026-09-10', 'Compra antigua', -1000, 'Supermercado'),
+            ]
+            for index, (source, day, description, amount, category) in enumerate(movements):
+                conn.execute(
+                    '''
+                    INSERT INTO movimientos (
+                        fuente, f_valor, fecha, concepto, movimiento, importe_cent,
+                        divisa, categoria2, clave
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'EUR', ?, ?)
+                    ''',
+                    (source, day, day, description, 'Pago', amount, category, f'test-{index}'),
+                )
+            conn.commit()
+            conn.close()
+
+            with patch('AppGastos.DB_PATH', db_path):
+                response = self.client.get(
+                    '/api/dashboard/movimientos?fuentes=BBVA&date_start=2026-10-01'
+                    '&date_end=2026-10-31&categoria0=Hogar'
+                )
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertEqual(payload['total'], 1)
+            self.assertEqual(payload['items'][0]['concepto'], 'Compra de comida')
+            self.assertEqual(payload['items'][0]['categoria2'], 'Supermercado')
+
     def test_input_importer_avoids_duplicates(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             input_dir = Path(tmpdir) / 'input'
@@ -142,6 +200,60 @@ class GastosAppTests(unittest.TestCase):
             total = conn.execute('SELECT COUNT(*) FROM movimientos').fetchone()[0]
             conn.close()
             self.assertEqual(total, 2)
+
+    def test_bbva_import_updates_missing_snapshots_and_uses_latest_same_day_balance(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_dir = Path(tmpdir) / 'input'
+            input_dir.mkdir()
+            workbook = input_dir / 'ultimos movimientos.xlsx'
+            pd.DataFrame([
+                ['Últimos movimientos', None, None, None, None, None, None, None, None],
+                ['Fecha de generación del informe: 18/10/2026', None, None, None, None, None, None, None, None],
+                [None] * 9,
+                ['F.Valor', 'Fecha', 'Concepto', 'Movimiento', 'Importe', 'Divisa', 'Disponible', 'Divisa', 'Observaciones'],
+                ['17/10/2026', '19/10/2026', 'Carrefour', 'Pago con tarjeta', -16.07, 'EUR', 99.03, 'EUR', 'CARREFOUR'],
+                ['17/10/2026', '19/10/2026', 'Tamoil', 'Pago con tarjeta', -70.68, 'EUR', 115.10, 'EUR', 'TAMOIL'],
+            ]).to_excel(workbook, index=False, header=False)
+
+            parsed_rows = parse_bbva_xlsx(workbook)
+            self.assertEqual([row['disponible_cent'] for row in parsed_rows], [9903, 11510])
+
+            db_path = Path(tmpdir) / 'gastos.db'
+            conn = sqlite3.connect(db_path)
+            schema_sql = Path(__file__).resolve().parent / 'schema.sql'
+            conn.executescript(schema_sql.read_text(encoding='utf-8'))
+            old_rows = [
+                {**row, 'categoria2': 'Ropa', 'disponible_cent': None}
+                for row in parsed_rows
+            ]
+            self.assertEqual(insert_rows(conn, old_rows)['inserted'], 2)
+            conn.close()
+
+            preview = preview_import_files(input_dir, db_path)
+            self.assertEqual(preview['count'], 2)
+            self.assertTrue(all(row['update_snapshot'] for row in preview['rows']))
+
+            result = import_files(input_dir, db_path)
+            self.assertEqual(result['inserted'], 0)
+            self.assertEqual(result['updated'], 2)
+
+            with patch('AppGastos.DB_PATH', db_path):
+                response = self.client.get('/api/dashboard?fuentes=BBVA')
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()['total_general'], 9903)
+
+    def test_bankinter_parser_includes_running_balance(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workbook = Path(tmpdir) / 'Movimientos.xlsx'
+            pd.DataFrame([
+                ['Fecha contable', 'Fecha valor', 'Descripción', 'Importe', 'Saldo', 'Divisa'],
+                ['13/10/2026', '12/10/2026', 'GUEROIL', -6.15, 10346.72, 'EUR'],
+            ]).to_excel(workbook, index=False, header=False)
+
+            rows = parse_bankinter_xlsx(workbook)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]['importe_cent'], -615)
+            self.assertEqual(rows[0]['disponible_cent'], 1034672)
 
     def test_import_preview_endpoint(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -441,10 +553,12 @@ class GastosAppTests(unittest.TestCase):
             csv_path = input_dir / 'account-statement_2026-09.csv'
             csv_path.write_text(
                 'Tipo,Producto,Fecha de inicio,Fecha de finalización,Descripción,Importe,Comisión,Divisa,State,Saldo\n'
-                'Recargas,,2026-09-17 23:05:14,2026-09-17 23:05:15,Pago de MANUEL VALLEJO SÁNCHEZ,50.00,0.00,EUR,COMPLETED,50.00\n',
+                'Recargas,,2026-09-17 23:05:14,2026-09-17 23:05:15,Pago de MANUEL VALLEJO SÁNCHEZ,50.00,0.00,EUR,COMPLETED,53.01\n',
                 encoding='utf-8',
             )
-            self.assertEqual(parse_revolut_csv(csv_path)[0]['importe_cent'], 5000)
+            parsed_row = parse_revolut_csv(csv_path)[0]
+            self.assertEqual(parsed_row['importe_cent'], 5000)
+            self.assertEqual(parsed_row['disponible_cent'], 5301)
 
             db_path = Path(tmpdir) / 'gastos.db'
             conn = sqlite3.connect(db_path)
@@ -454,13 +568,13 @@ class GastosAppTests(unittest.TestCase):
                 '''
                 INSERT INTO movimientos (
                     fuente, f_valor, fecha, concepto, movimiento, importe_cent,
-                    divisa, observaciones, categoria2, key_legacy, clave
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    divisa, disponible_cent, observaciones, categoria2, key_legacy, clave
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''',
                 (
                     'REVOLUT', '2026-09-17 23:05:15', '2026-09-17 23:05:14',
                     'Pago de MANUEL VALLEJO SÃ\x81NCHEZ', 'Recargas', 5000, 'EUR',
-                    'Pago de MANUEL VALLEJO SÃ\x81NCHEZ', 'Ingreso', 'legacy-key', 'legacy-clave',
+                    5301, 'Pago de MANUEL VALLEJO SÃ\x81NCHEZ', 'Ingreso', 'legacy-key', 'legacy-clave',
                 ),
             )
             conn.commit()

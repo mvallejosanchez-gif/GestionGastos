@@ -160,6 +160,40 @@ def existing_import_match_keys(conn: sqlite3.Connection) -> set[tuple]:
     return keys
 
 
+def find_missing_snapshot_updates(
+    conn: sqlite3.Connection,
+    rows: Iterable[dict],
+    selected_keys: set[str] | None = None,
+) -> dict[str, tuple[int, int]]:
+    fields = ('id', 'fuente', 'f_valor', 'fecha', 'concepto', 'importe_cent', 'divisa', 'observaciones')
+    existing_by_match_key: dict[tuple, set[int]] = {}
+    for values in conn.execute(
+        '''
+        SELECT id, fuente, f_valor, fecha, concepto, importe_cent, divisa, observaciones
+        FROM movimientos
+        WHERE disponible_cent IS NULL
+        '''
+    ):
+        record = dict(zip(fields, values))
+        for match_key in build_import_match_keys(record):
+            existing_by_match_key.setdefault(match_key, set()).add(record['id'])
+
+    updates = {}
+    for row in rows:
+        disponible_cent = row.get('disponible_cent')
+        if disponible_cent is None:
+            continue
+        clave = build_unique_key(row)
+        if selected_keys is not None and clave not in selected_keys:
+            continue
+        match_ids = set()
+        for match_key in build_import_match_keys(row):
+            match_ids.update(existing_by_match_key.get(match_key, ()))
+        if len(match_ids) == 1:
+            updates[clave] = (match_ids.pop(), int(disponible_cent))
+    return updates
+
+
 def ensure_catalog(conn: sqlite3.Connection, row: dict):
     categoria2 = normalize_text(row.get('categoria2')) or 'PENDIENTE'
     categoria1 = normalize_text(row.get('categoria1')) or 'PENDIENTE'
@@ -278,6 +312,7 @@ def parse_revolut_csv(path: Path):
             'concepto': row.get('Descripción') or row.get('Description') or 'Revolut',
             'movimiento': row.get('Tipo') or row.get('Type') or 'Movimiento',
             'importe_cent': importe_cent,
+            'disponible_cent': money_to_cents(row.get('Saldo')) if pd.notna(row.get('Saldo')) else None,
             'divisa': row.get('Divisa') or row.get('Currency') or 'EUR',
             'observaciones': row.get('Descripción') or row.get('Description') or '',
             'categoria2': 'PENDIENTE',
@@ -371,6 +406,7 @@ def parse_bbva_xlsx(path: Path):
     for _, row in df.iterrows():
         if row.isna().all():
             continue
+        disponible = _row_value(row, ['Disponible'])
         rows.append({
             'fuente': 'BBVA',
             'f_valor': _row_value(row, ['F.Valor', 'Fecha valor', 'Fecha Valor', 'Fecha']) or _row_value(row, ['Fecha']),
@@ -379,6 +415,7 @@ def parse_bbva_xlsx(path: Path):
             'movimiento': _row_value(row, ['Movimiento']) or 'Movimiento',
             'importe_cent': money_to_cents(_row_value(row, ['Importe', 'Importe (€)']) or 0),
             'divisa': _row_value(row, ['Divisa']) or 'EUR',
+            'disponible_cent': money_to_cents(disponible) if disponible is not None else None,
             'observaciones': _row_value(row, ['Observaciones']) or '',
             'categoria2': _row_value(row, ['Categoría2', 'Categoria2']) or 'PENDIENTE',
             'categoria1': _row_value(row, ['Categoría1', 'Categoria1']) or 'PENDIENTE',
@@ -402,6 +439,11 @@ def parse_bankinter_xlsx(path: Path):
             'concepto': _row_value(row, ['Descripción', 'Descripcion', 'Concepto']) or 'Bankinter',
             'movimiento': _row_value(row, ['Movimiento', 'Tipo']) or 'Movimiento',
             'importe_cent': money_to_cents(_row_value(row, ['Importe', 'Importe (€)']) or 0),
+            'disponible_cent': (
+                money_to_cents(_row_value(row, ['Saldo', 'Disponible']))
+                if _row_value(row, ['Saldo', 'Disponible']) is not None
+                else None
+            ),
             'divisa': 'EUR',
             'observaciones': _row_value(row, ['Observaciones', 'Nota']) or '',
             'categoria2': 'PENDIENTE',
@@ -524,6 +566,7 @@ def preview_import_files(input_dir: Path | str = DEFAULT_INPUT_DIR, db_path: Pat
     all_rows, processed_files = collect_input_rows(input_dir)
     existing_claves = {row[0] for row in conn.execute('SELECT clave FROM movimientos WHERE clave IS NOT NULL')}
     existing_match_keys = existing_import_match_keys(conn)
+    snapshot_updates = find_missing_snapshot_updates(conn, all_rows)
     preview_rows = []
     seen = set()
     seen_match_keys = set()
@@ -535,6 +578,23 @@ def preview_import_files(input_dir: Path | str = DEFAULT_INPUT_DIR, db_path: Pat
         clave = build_unique_key(row)
         row['clave'] = clave
         match_keys = build_import_match_keys(row)
+        if clave in snapshot_updates:
+            preview_rows.append({
+                'fuente': normalize_text(row.get('fuente')),
+                'f_valor': normalize_text(row.get('f_valor')) or normalize_text(row.get('fecha')),
+                'fecha': normalize_text(row.get('fecha')) or normalize_text(row.get('f_valor')),
+                'concepto': normalize_text(row.get('concepto')),
+                'movimiento': normalize_text(row.get('movimiento')),
+                'importe_cent': int(row.get('importe_cent') or 0),
+                'disponible_cent': int(row.get('disponible_cent')),
+                'divisa': normalize_text(row.get('divisa')) or 'EUR',
+                'categoria2': normalize_text(row.get('categoria2')) or 'PENDIENTE',
+                'observaciones': normalize_text(row.get('observaciones')) or '',
+                'source_file': normalize_text(row.get('source_file')),
+                'clave': clave,
+                'update_snapshot': True,
+            })
+            continue
         if clave in existing_claves or match_keys & existing_match_keys or clave in seen or match_keys & seen_match_keys:
             continue
         seen.add(clave)
@@ -549,11 +609,13 @@ def preview_import_files(input_dir: Path | str = DEFAULT_INPUT_DIR, db_path: Pat
             'concepto': normalize_text(row.get('concepto')),
             'movimiento': normalize_text(row.get('movimiento')),
             'importe_cent': int(importe_cent or 0),
+            'disponible_cent': row.get('disponible_cent'),
             'divisa': normalize_text(row.get('divisa')) or 'EUR',
             'categoria2': normalize_text(row.get('categoria2')) or 'PENDIENTE',
             'observaciones': normalize_text(row.get('observaciones')) or '',
             'source_file': normalize_text(row.get('source_file')),
             'clave': clave,
+            'update_snapshot': False,
         })
 
     conn.close()
@@ -583,6 +645,15 @@ def import_files(
     all_rows, processed_files = collect_input_rows(input_dir)
     existing_claves = {row[0] for row in conn.execute('SELECT clave FROM movimientos WHERE clave IS NOT NULL')}
     existing_match_keys = existing_import_match_keys(conn)
+    snapshot_updates = find_missing_snapshot_updates(conn, all_rows, selected_keys)
+    updated = 0
+    for mov_id, disponible_cent in snapshot_updates.values():
+        cursor = conn.execute(
+            'UPDATE movimientos SET disponible_cent = ? WHERE id = ? AND disponible_cent IS NULL',
+            (disponible_cent, mov_id),
+        )
+        updated += cursor.rowcount
+
     pending_rows = []
     seen = set()
     seen_match_keys = set()
@@ -604,6 +675,7 @@ def import_files(
 
     summary = insert_rows(conn, pending_rows)
     conn.close()
+    summary['updated'] = updated
     summary['files'] = processed_files
     summary['message'] = 'Importación completada'
     return summary
