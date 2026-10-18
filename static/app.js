@@ -70,6 +70,7 @@ const savingsForm = document.getElementById('savingsForm');
 const savingsModalTitle = document.getElementById('savingsModalTitle');
 const savingsProjectionYearsInput = document.getElementById('savingsProjectionYears');
 const savingsForecastMonthsInput = document.getElementById('savingsForecastMonths');
+const savingsStartDateInput = document.getElementById('savingsStartDate');
 const savingsProjectionConfigStatus = document.getElementById('savingsProjectionConfigStatus');
 const importSummaryBadge = document.getElementById('importSummaryBadge');
 const importStatusText = document.getElementById('importStatusText');
@@ -130,12 +131,119 @@ let savingsChartInstance = null;
 let savingsRecords = [];
 let savedSavingsProjectionYears = '5';
 let savedSavingsForecastMonths = '12';
+let savedSavingsStartDate = '';
+const tableSortStates = new WeakMap();
 let dashboardRange = {
   min: null,
   max: null,
   start: null,
   end: null,
 };
+
+function getTableRows(tbody) {
+  return [...tbody.rows].filter((row) => !row.querySelector('.empty'));
+}
+
+function getSortableValue(cell) {
+  const value = cell?.textContent.trim() || '';
+  const dateMatch = value.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (dateMatch) {
+    return { type: 'number', value: Date.UTC(Number(dateMatch[3]), Number(dateMatch[2]) - 1, Number(dateMatch[1])) };
+  }
+  if (/^\d{4}-\d{2}(-\d{2})?$/.test(value)) {
+    return { type: 'number', value: Date.parse(value.length === 7 ? `${value}-01` : value) };
+  }
+
+  const numeric = value.replace(/[€\s]/g, '').replace(/[^\d,.-]/g, '');
+  if (numeric && /^-?[\d.]+(?:,\d+)?$/.test(numeric)) {
+    const sign = /^\(.*\)$/.test(value) ? -1 : 1;
+    return { type: 'number', value: sign * Number(numeric.replace(/\./g, '').replace(',', '.')) };
+  }
+  return { type: 'text', value: value.toLocaleLowerCase('es') };
+}
+
+function compareTableCells(left, right) {
+  const a = getSortableValue(left);
+  const b = getSortableValue(right);
+  if (a.type === 'number' && b.type === 'number') return a.value - b.value;
+  return String(a.value).localeCompare(String(b.value), 'es', { numeric: true, sensitivity: 'base' });
+}
+
+function sortTableBody(table, tbody, columnIndex, direction) {
+  const rows = getTableRows(tbody);
+  if (rows.length < 2) return;
+
+  const chunks = [];
+  if (table.classList.contains('budget-table') && tbody.id === 'budgetRows') {
+    rows.forEach((row) => {
+      if (row.classList.contains('budget-group-row')) chunks.push({ rows: [row], keyRow: row });
+      else if (chunks.length) {
+        chunks[chunks.length - 1].rows.push(row);
+        if (!chunks[chunks.length - 1].keyRow.cells[columnIndex]?.textContent.trim()) {
+          chunks[chunks.length - 1].keyRow = row;
+        }
+      } else chunks.push({ rows: [row], keyRow: row });
+    });
+  } else {
+    rows.forEach((row) => chunks.push({ rows: [row], keyRow: row }));
+  }
+
+  chunks.sort((a, b) => compareTableCells(a.keyRow.cells[columnIndex], b.keyRow.cells[columnIndex]) * direction);
+  chunks.forEach((chunk) => tbody.append(...chunk.rows));
+}
+
+function setTableSort(table, columnIndex, direction, bodies = [...table.tBodies]) {
+  tableSortStates.set(table, { columnIndex, direction });
+  [...(table.tHead?.rows[0]?.cells || [])].forEach((header, index) => {
+    header.setAttribute('aria-sort', index === columnIndex
+      ? direction === -1 ? 'descending' : 'ascending'
+      : 'none');
+  });
+  bodies.forEach((tbody) => sortTableBody(table, tbody, columnIndex, direction));
+}
+
+function initializeTableSort(table, bodies = [...table.tBodies]) {
+  const headers = [...(table.tHead?.rows[0]?.cells || [])];
+  headers.forEach((header) => {
+    header.tabIndex = 0;
+    header.classList.add('sortable-header');
+    header.setAttribute('aria-sort', 'none');
+  });
+  const defaultColumn = headers.findIndex((header) => /^\s*(fecha|mes|día|dia)(?:\s|$)/i.test(header.textContent));
+  if (defaultColumn >= 0) setTableSort(table, defaultColumn, -1, bodies);
+  else tableSortStates.delete(table);
+}
+
+function applyDefaultTableSort(tbody) {
+  const table = tbody.closest('table');
+  const headers = [...(table?.tHead?.rows[0]?.cells || [])];
+  const dateColumn = headers.findIndex((header) => /^\s*(fecha|mes|día|dia)(?:\s|$)/i.test(header.textContent));
+  if (table && dateColumn >= 0) setTableSort(table, dateColumn, -1, [tbody]);
+}
+
+function initializeSortableTables() {
+  document.querySelectorAll('table').forEach((table) => initializeTableSort(table));
+
+  document.addEventListener('click', (event) => {
+    const header = event.target.closest('th.sortable-header');
+    if (!header || event.target.closest('input, button, a')) return;
+    const table = header.closest('table');
+    const columnIndex = header.cellIndex;
+    const currentSort = tableSortStates.get(table);
+    const direction = currentSort?.columnIndex === columnIndex
+      ? currentSort.direction * -1
+      : 1;
+    setTableSort(table, columnIndex, direction);
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const header = event.target.closest('th.sortable-header');
+    if (!header || event.target.closest('input, button, a')) return;
+    event.preventDefault();
+    header.click();
+  });
+}
 
 function money(value) {
   if (value === null || value === undefined || value === '') return '—';
@@ -595,6 +703,7 @@ function renderBalanceChart(data) {
     });
     balanceHistoryRows.appendChild(row);
   });
+  applyDefaultTableSort(balanceHistoryRows);
 
   const monthLabel = data.month ? formatDateValue(`${data.month}-01`) : '';
   balanceChartSummary.textContent = `${monthLabel} · media, mínimo y máximo de los ${data.months_history} meses anteriores, desde el ${formatShortDate(data.first_date || data.history_start)}`;
@@ -687,6 +796,7 @@ function renderImportPreviewRows(rows, filesCount = 0, targetBody = importPrevie
       `
     )
     .join('');
+  applyDefaultTableSort(targetBody);
 
   targetBody.querySelectorAll('.import-row-checkbox').forEach((checkbox) => {
     checkbox.addEventListener('change', () => {
@@ -842,6 +952,7 @@ function renderMovimientos(items) {
       `
     )
     .join('');
+  applyDefaultTableSort(tableBody);
 
   tableBody.querySelectorAll('.category-edit-btn').forEach((button) => {
     button.addEventListener('click', () => {
@@ -1356,23 +1467,29 @@ function getSavingsTotalMonthlyChange(records, months) {
   return monthlyRates.reduce((total, rate) => total + rate, 0) / monthlyRates.length;
 }
 
+function getVisibleSavingsRecords() {
+  if (!savedSavingsStartDate) return savingsRecords;
+  return savingsRecords.filter((record) => savingsDateForInput(record.Mes) >= savedSavingsStartDate);
+}
+
 function renderSavingsChart() {
   if (savingsChartInstance) savingsChartInstance.destroy();
-  const labels = savingsRecords.map((record) => record.Mes);
-  const totalValues = savingsRecords.map((record) => {
+  const visibleRecords = getVisibleSavingsRecords();
+  const labels = visibleRecords.map((record) => record.Mes);
+  const totalValues = visibleRecords.map((record) => {
     const value = Number(record['Ahorro Total']);
     return Number.isFinite(value) ? value : 0;
   });
-  const hypotheticalValues = savingsRecords.map((record) => {
+  const hypotheticalValues = visibleRecords.map((record) => {
     const value = Number(record['Ahorro Hipotético']);
     return Number.isFinite(value) ? value : 0;
   });
-  const totalForecastValues = savingsRecords.map(() => null);
-  const hypotheticalForecastValues = savingsRecords.map(() => null);
+  const totalForecastValues = visibleRecords.map(() => null);
+  const hypotheticalForecastValues = visibleRecords.map(() => null);
 
-  if (savingsRecords.length) {
-    const lastIndex = savingsRecords.length - 1;
-    const lastRecord = savingsRecords[lastIndex];
+  if (visibleRecords.length) {
+    const lastIndex = visibleRecords.length - 1;
+    const lastRecord = visibleRecords[lastIndex];
     const windowMonths = Number(savedSavingsForecastMonths);
     const plannedMonthlySavings = getSavingsProjectionMonthlyAverage(savingsRecords, windowMonths);
     const totalMonthlyChange = getSavingsTotalMonthlyChange(savingsRecords, windowMonths);
@@ -1452,19 +1569,22 @@ function renderSavingsChart() {
 }
 
 function renderSavingsRows() {
+  const visibleRecords = getVisibleSavingsRecords();
   savingsRows.replaceChildren();
-  if (!savingsRecords.length) {
+  if (!visibleRecords.length) {
     const row = document.createElement('tr');
     const cell = document.createElement('td');
     cell.colSpan = 5;
     cell.className = 'empty';
-    cell.textContent = 'No hay registros de ahorro.';
+    cell.textContent = savedSavingsStartDate
+      ? 'No hay registros de ahorro desde la fecha seleccionada.'
+      : 'No hay registros de ahorro.';
     row.appendChild(cell);
     savingsRows.appendChild(row);
     return;
   }
 
-  savingsRecords.forEach((record) => {
+  visibleRecords.forEach((record) => {
     const row = document.createElement('tr');
     const values = [
       record.Mes,
@@ -1490,6 +1610,7 @@ function renderSavingsRows() {
     row.appendChild(actionCell);
     savingsRows.appendChild(row);
   });
+  applyDefaultTableSort(savingsRows);
 }
 
 async function loadSavings() {
@@ -1501,12 +1622,14 @@ async function loadSavings() {
     ]);
     savedSavingsProjectionYears = String(config.anios_proyeccion_ahorro);
     savedSavingsForecastMonths = String(config.meses_media_forecast_ahorro);
+    savedSavingsStartDate = config.fecha_inicio_evolucion_ahorro || '';
     savingsProjectionYearsInput.value = savedSavingsProjectionYears;
     savingsForecastMonthsInput.value = savedSavingsForecastMonths;
+    savingsStartDateInput.value = savedSavingsStartDate;
     savingsRecords = data.rows;
     renderSavingsRows();
     renderSavingsChart();
-    savingsStatus.textContent = `${savingsRecords.length} registros cargados.`;
+    savingsStatus.textContent = `${getVisibleSavingsRecords().length} de ${savingsRecords.length} registros mostrados.`;
   } catch (error) {
     savingsStatus.textContent = error.message;
   }
@@ -1571,8 +1694,10 @@ async function loadSavingsProjectionConfig() {
   const data = await fetchJson('/api/config/ahorro-proyeccion');
   savedSavingsProjectionYears = String(data.anios_proyeccion_ahorro);
   savedSavingsForecastMonths = String(data.meses_media_forecast_ahorro);
+  savedSavingsStartDate = data.fecha_inicio_evolucion_ahorro || '';
   savingsProjectionYearsInput.value = savedSavingsProjectionYears;
   savingsForecastMonthsInput.value = savedSavingsForecastMonths;
+  savingsStartDateInput.value = savedSavingsStartDate;
   savingsProjectionConfigStatus.textContent = '';
 }
 
@@ -1618,6 +1743,26 @@ async function saveSavingsForecastMonths() {
     if (activeViewName === 'savings') renderSavingsChart();
   } catch (error) {
     savingsForecastMonthsInput.value = savedSavingsForecastMonths;
+    savingsProjectionConfigStatus.textContent = error.message;
+  }
+}
+
+async function saveSavingsStartDate() {
+  try {
+    const result = await fetchJson('/api/config/ahorro-proyeccion', {
+      method: 'PUT',
+      body: JSON.stringify({ fecha_inicio_evolucion_ahorro: savingsStartDateInput.value }),
+    });
+    savedSavingsStartDate = result.fecha_inicio_evolucion_ahorro || '';
+    savingsStartDateInput.value = savedSavingsStartDate;
+    savingsProjectionConfigStatus.textContent = savedSavingsStartDate
+      ? `La evolución del ahorro se mostrará desde el ${formatDateValue(savedSavingsStartDate)}.`
+      : 'Se mostrarán todos los registros de ahorro.';
+    renderSavingsRows();
+    renderSavingsChart();
+    savingsStatus.textContent = `${getVisibleSavingsRecords().length} de ${savingsRecords.length} registros mostrados.`;
+  } catch (error) {
+    savingsStartDateInput.value = savedSavingsStartDate;
     savingsProjectionConfigStatus.textContent = error.message;
   }
 }
@@ -1747,6 +1892,7 @@ budgetMonth.value = new Date().toISOString().slice(0, 7);
 budgetMonth.addEventListener('change', loadBudgets);
 savingsProjectionYearsInput.addEventListener('change', saveSavingsProjectionConfig);
 savingsForecastMonthsInput.addEventListener('change', saveSavingsForecastMonths);
+savingsStartDateInput.addEventListener('change', saveSavingsStartDate);
 document.getElementById('addSavingsRecord').addEventListener('click', () => openSavingsModal());
 savingsForm.addEventListener('submit', saveSavingsRecord);
 document.getElementById('closeSavingsModal').addEventListener('click', closeSavingsModal);
@@ -2010,6 +2156,7 @@ editForm.addEventListener('submit', async (event) => {
 });
 
 (async function init() {
+  initializeSortableTables();
   populateEditCategoryOptions();
   await loadOptions();
   await loadSummary();

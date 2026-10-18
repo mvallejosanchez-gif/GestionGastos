@@ -346,14 +346,19 @@ def api_config_ahorro_proyeccion():
             (
                 ('anios_proyeccion_ahorro', '5'),
                 ('meses_media_forecast_ahorro', '12'),
+                ('fecha_inicio_evolucion_ahorro', ''),
             ),
         )
         conn.commit()
         settings = {
             row['clave']: row['valor']
             for row in conn.execute(
-                'SELECT clave, valor FROM app_config WHERE clave IN (?, ?)',
-                ('anios_proyeccion_ahorro', 'meses_media_forecast_ahorro'),
+                'SELECT clave, valor FROM app_config WHERE clave IN (?, ?, ?)',
+                (
+                    'anios_proyeccion_ahorro',
+                    'meses_media_forecast_ahorro',
+                    'fecha_inicio_evolucion_ahorro',
+                ),
             )
         }
         try:
@@ -364,9 +369,16 @@ def api_config_ahorro_proyeccion():
             months = min(120, max(1, int(settings['meses_media_forecast_ahorro'])))
         except (TypeError, ValueError):
             months = 12
+        start_date = settings['fecha_inicio_evolucion_ahorro']
+        try:
+            if start_date:
+                start_date = datetime.strptime(start_date, '%Y-%m-%d').date().isoformat()
+        except (TypeError, ValueError):
+            start_date = ''
         return jsonify({
             'anios_proyeccion_ahorro': years,
             'meses_media_forecast_ahorro': months,
+            'fecha_inicio_evolucion_ahorro': start_date,
         })
     finally:
         conn.close()
@@ -382,6 +394,14 @@ def api_update_config_ahorro_proyeccion():
         'meses_media_forecast_ahorro': (1, 120, 'meses'),
     }
     updates = {}
+    if 'fecha_inicio_evolucion_ahorro' in payload:
+        start_date = str(payload['fecha_inicio_evolucion_ahorro'] or '').strip()
+        if start_date:
+            try:
+                start_date = datetime.strptime(start_date, '%Y-%m-%d').date().isoformat()
+            except ValueError:
+                return jsonify({'error': 'La fecha de inicio debe tener un formato válido'}), 400
+        updates['fecha_inicio_evolucion_ahorro'] = start_date
     for key, (minimum, maximum, unit) in supported_settings.items():
         if key not in payload:
             continue

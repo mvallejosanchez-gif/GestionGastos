@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Gestión de gastos</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20261018-05" />
   </head>
   <body>
     <div class="container">
@@ -20,13 +20,26 @@
       </header>
 
       <nav class="tabs" aria-label="Secciones">
-        <button id="tabDashboard" class="tab active" type="button">Resumen</button>
-        <button id="tabBalances" class="tab" type="button">Saldos</button>
-        <button id="tabMovimientos" class="tab" type="button">Movimientos</button>
-        <button id="tabImport" class="tab" type="button">Importar</button>
-        <button id="tabBudgets" class="tab" type="button">Presupuestos</button>
-        <button id="tabSavings" class="tab" type="button">Evolución ahorro</button>
-        <button id="tabConfig" class="tab config-tab" type="button" aria-label="Configuración" title="Configuración"><span aria-hidden="true">⚙</span></button>
+        <div class="tabs-main">
+          <button id="tabDashboard" class="tab active" type="button">Resumen</button>
+          <button id="tabMovimientos" class="tab" type="button">Movimientos</button>
+          <button id="tabBalances" class="tab" type="button">Saldos</button>
+          <button id="tabSavings" class="tab" type="button">Evolución ahorro</button>
+          <button id="tabBudgets" class="tab" type="button">Presupuestos</button>
+        </div>
+        <div class="tabs-tools" aria-label="Herramientas">
+          <button id="tabImport" class="tab icon-tab" type="button" aria-label="Importar" title="Importar">
+            <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+              <path d="M12 16V4m0 0L7 9m5-5 5 5M5 14v5h14v-5" />
+            </svg>
+          </button>
+          <button id="tabConfig" class="tab icon-tab" type="button" aria-label="Configuración" title="Configuración">
+            <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+              <path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z" />
+              <path d="m19.4 15 .1.1 1.4 1.1-1.4 2.4-1.7-.6a8 8 0 0 1-1.6.9l-.3 1.8h-2.8l-.3-1.8a8 8 0 0 1-1.6-.9l-1.7.6-1.4-2.4 1.4-1.1a7 7 0 0 1 0-1.9l-1.4-1.1 1.4-2.4 1.7.6a8 8 0 0 1 1.6-.9l.3-1.8h2.8l.3 1.8a8 8 0 0 1 1.6.9l1.7-.6 1.4 2.4-1.4 1.1a7 7 0 0 1 0 1.8Z" />
+            </svg>
+          </button>
+        </div>
       </nav>
 
       <section id="movimientosView" class="view">
@@ -324,6 +337,10 @@
               Meses de histórico para el forecast
               <input id="savingsForecastMonths" type="number" min="1" max="120" step="1" value="12" />
             </label>
+            <label class="field-group" for="savingsStartDate">
+              Mostrar ahorro desde
+              <input id="savingsStartDate" type="date" />
+            </label>
           </div>
           <p id="savingsProjectionConfigStatus" class="import-summary" role="status"></p>
         </section>
@@ -546,6 +563,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="{{ url_for('static', filename='app.js') }}?v=20261018-02"></script>
+    <script src="{{ url_for('static', filename='app.js') }}?v=20261018-05"></script>
   </body>
 </html>

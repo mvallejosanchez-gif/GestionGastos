@@ -115,8 +115,20 @@ h1 {
 
 .tabs {
   display: flex;
+  align-items: center;
   gap: 8px;
   margin-bottom: 16px;
+}
+
+.tabs-main,
+.tabs-tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tabs-tools {
+  margin-left: auto;
 }
 
 .tab {
@@ -134,12 +146,25 @@ h1 {
   border-color: var(--primary);
 }
 
-.config-tab {
+.icon-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 40px;
-  margin-left: auto;
+  min-width: 40px;
+  height: 36px;
   padding: 8px;
-  font-size: 18px;
   line-height: 1;
+}
+
+.icon-tab svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .view {
@@ -286,6 +311,24 @@ th {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   background: #fafcff;
+}
+
+.sortable-header {
+  cursor: pointer;
+  user-select: none;
+}
+
+.sortable-header:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -2px;
+}
+
+.sortable-header[aria-sort="ascending"]::after {
+  content: " ▲";
+}
+
+.sortable-header[aria-sort="descending"]::after {
+  content: " ▼";
 }
 
 .selection-cell {
@@ -553,11 +596,6 @@ tbody tr:hover {
 
 .savings-records-panel {
   margin-top: 16px;
-}
-
-.savings-records-table th {
-  text-transform: none;
-  letter-spacing: normal;
 }
 
 .savings-records-table .savings-amount {
@@ -1067,6 +1105,19 @@ tbody tr:hover {
 }
 
 @media (max-width: 780px) {
+  .tabs {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .tabs-main {
+    flex-wrap: wrap;
+  }
+
+  .tabs-tools {
+    margin-left: auto;
+  }
+
   .filters {
     grid-template-columns: 1fr;
   }
