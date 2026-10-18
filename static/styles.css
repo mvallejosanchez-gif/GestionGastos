@@ -546,6 +546,19 @@ tbody tr:hover {
   padding: 20px;
 }
 
+.savings-chart-wrap {
+  position: relative;
+  height: 380px;
+}
+
+.savings-records-panel {
+  margin-top: 16px;
+}
+
+.savings-modal-content {
+  width: min(900px, 94vw);
+}
+
 .dashboard-header {
   display: flex;
   justify-content: space-between;
@@ -1069,6 +1082,10 @@ tbody tr:hover {
   .budget-toolbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .savings-chart-wrap {
+    height: 300px;
   }
 
   .balance-history-header,

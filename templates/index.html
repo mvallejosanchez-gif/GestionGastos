@@ -25,6 +25,7 @@
         <button id="tabMovimientos" class="tab" type="button">Movimientos</button>
         <button id="tabImport" class="tab" type="button">Importar</button>
         <button id="tabBudgets" class="tab" type="button">Presupuestos</button>
+        <button id="tabSavings" class="tab" type="button">Evolución ahorro</button>
         <button id="tabConfig" class="tab config-tab" type="button" aria-label="Configuración" title="Configuración"><span aria-hidden="true">⚙</span></button>
       </nav>
 
@@ -204,6 +205,41 @@
         </section>
       </section>
 
+      <section id="savingsView" class="view">
+        <section class="panel dashboard-panel">
+          <div class="table-toolbar">
+            <div>
+              <h2>Evolución del ahorro</h2>
+              <p class="muted">El forecast de ahorro hipotético usa la previsión mensual media; el de ahorro total, el incremento mensual medio. Ambos se calculan con la ventana histórica configurada.</p>
+            </div>
+            <button id="addSavingsRecord" class="primary" type="button">+ Añadir registro</button>
+          </div>
+          <div class="savings-chart-wrap">
+            <canvas id="savingsChart" aria-label="Evolución y extrapolación del ahorro"></canvas>
+          </div>
+          <p id="savingsStatus" class="import-summary" role="status" aria-live="polite"></p>
+        </section>
+        <section class="panel table-panel savings-records-panel">
+          <div class="table-toolbar">
+            <h2>Registros</h2>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Mes</th>
+                  <th>Ahorro total</th>
+                  <th>Ahorro mensual previsto</th>
+                  <th>Comentarios</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="savingsRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
       <section id="importView" class="view">
         <section class="panel table-panel">
           <div class="table-toolbar">
@@ -275,6 +311,21 @@
             </label>
           </div>
           <p id="balanceHistoryConfigStatus" class="import-summary" role="status"></p>
+        </section>
+        <section class="panel balance-config-panel">
+          <h2>Extrapolación del ahorro</h2>
+          <p class="muted">Configura la ventana histórica para calcular las tasas mensuales y los años que se mostrarán como forecast.</p>
+          <div class="balance-config-controls">
+            <label class="field-group" for="savingsProjectionYears">
+              Años de proyección
+              <input id="savingsProjectionYears" type="number" min="1" max="50" step="1" value="5" />
+            </label>
+            <label class="field-group" for="savingsForecastMonths">
+              Meses de histórico para el forecast
+              <input id="savingsForecastMonths" type="number" min="1" max="120" step="1" value="12" />
+            </label>
+          </div>
+          <p id="savingsProjectionConfigStatus" class="import-summary" role="status"></p>
         </section>
       </section>
 
@@ -457,6 +508,44 @@
       </div>
     </div>
 
-    <script src="{{ url_for('static', filename='app.js') }}?v=20261012-03"></script>
+    <div id="savingsModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-content savings-modal-content">
+        <div class="modal-header">
+          <h2 id="savingsModalTitle">Añadir registro de ahorro</h2>
+          <button id="closeSavingsModal" type="button" class="close" aria-label="Cerrar">×</button>
+        </div>
+        <div class="modal-body">
+          <form id="savingsForm">
+            <input type="hidden" name="rowid" />
+            <div class="form-grid">
+              <label>Mes<input name="Mes" type="date" required /></label>
+              <label>Ahorro BBVA<input name="Ahorro BBVA" type="number" step="any" /></label>
+              <label>Ahorro Bankinter<input name="Ahorro Bankinter" type="number" step="any" /></label>
+              <label>Ahorro N26<input name="Ahorro N26" type="number" step="any" /></label>
+              <label>Ahorro Trade Republic<input name="Ahorro Trade Republic" type="number" step="any" /></label>
+              <label>Ahorro Revolut<input name="Ahorro Revolut" type="number" step="any" /></label>
+              <label>Ahorro PIBANK<input name="Ahorro PIBANK" type="number" step="any" /></label>
+              <label>Trade Wallet<input name="Trade Wallet" type="number" step="any" /></label>
+              <label>Kraken Wallet<input name="Kraken Wallet" type="number" step="any" /></label>
+              <label>Ahorro Acciones<input name="Ahorro Acciones" type="number" step="any" /></label>
+              <label>UBS Acciones<input name="UBS Acciones" type="number" step="any" /></label>
+              <label>PPI BBVA<input name="PPI BBVA" type="number" step="any" /></label>
+              <label>Ahorro Mensual Previsto<input name="Ahorro Mensual Previsto" type="number" step="any" /></label>
+              <label>Gasto Extra2<input name="Gasto Extra2" type="number" step="any" /></label>
+              <label>Aportaciones Abuela<input name="Aportaciones Abuela" type="number" step="any" /></label>
+              <label>Considerado en gráfica?<input name="Considerado en grafica?" type="text" /></label>
+              <label class="full-width">Comentarios<textarea name="Comentarios" rows="2"></textarea></label>
+            </div>
+            <div class="modal-actions">
+              <button type="submit" class="primary">Guardar</button>
+              <button id="cancelSavingsModal" type="button" class="secondary">Cancelar</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="{{ url_for('static', filename='app.js') }}?v=20261018-01"></script>
   </body>
 </html>

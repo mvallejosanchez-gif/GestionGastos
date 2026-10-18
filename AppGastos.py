@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import math
 import sqlite3
 import uuid
 from datetime import date, datetime, timedelta
@@ -45,6 +46,25 @@ MONTHLY_BUDGETS_CENTS = {
 }
 
 app = Flask(__name__)
+
+AHORRO_AMOUNT_COLUMNS = (
+    'Ahorro BBVA',
+    'Ahorro Bankinter',
+    'Ahorro N26',
+    'Ahorro Trade Republic',
+    'Ahorro Revolut',
+    'Ahorro PIBANK',
+    'Trade Wallet',
+    'Kraken Wallet',
+    'Ahorro Acciones',
+    'UBS Acciones',
+    'PPI BBVA',
+    'Ahorro Mensual Previsto',
+    'Gasto Extra2',
+    'Aportaciones Abuela',
+)
+AHORRO_TOTAL_COLUMNS = AHORRO_AMOUNT_COLUMNS[:11]
+AHORRO_TEXT_COLUMNS = ('Mes', 'Considerado en grafica?', 'Comentarios')
 
 
 @app.after_request
@@ -168,6 +188,227 @@ def fetch_movement_by_id(conn: sqlite3.Connection, mov_id: int):
 @app.get('/')
 def index():
     return render_template('index.html')
+
+
+def parse_ahorro_amount(value):
+    if value is None or value == '':
+        return None
+    if isinstance(value, (int, float)):
+        amount = float(value)
+        if not math.isfinite(amount):
+            raise ValueError('El importe debe ser un número finito')
+        return amount
+
+    text = str(value).strip().replace('€', '').replace('$', '').replace(' ', '')
+    if not text:
+        return None
+    if text.startswith('(') and text.endswith(')'):
+        text = f'-{text[1:-1]}'
+
+    if ',' in text and '.' in text:
+        if text.rfind(',') > text.rfind('.'):
+            text = text.replace('.', '').replace(',', '.')
+        else:
+            text = text.replace(',', '')
+    elif ',' in text:
+        text = text.replace(',', '.')
+
+    amount = float(text)
+    if not math.isfinite(amount):
+        raise ValueError('El importe debe ser un número finito')
+    return amount
+
+
+def parse_ahorro_date(value):
+    text = str(value or '').strip()
+    for date_format in ('%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y'):
+        try:
+            return datetime.strptime(text, date_format).date()
+        except ValueError:
+            continue
+    raise ValueError(f'Fecha de ahorro no válida: {text}')
+
+
+def get_ahorro_records(conn: sqlite3.Connection) -> list[dict]:
+    columns = [row['name'] for row in conn.execute('PRAGMA table_info(ahorro)')]
+    required_columns = set(AHORRO_AMOUNT_COLUMNS) | set(AHORRO_TEXT_COLUMNS)
+    if not required_columns.issubset(columns):
+        missing = ', '.join(sorted(required_columns - set(columns)))
+        raise sqlite3.OperationalError(f'Faltan columnas en la tabla ahorro: {missing}')
+
+    records = []
+    for row in conn.execute('SELECT rowid AS _rowid, * FROM ahorro'):
+        record = dict(row)
+        record['rowid'] = record.pop('_rowid')
+        record['_parsed_mes'] = parse_ahorro_date(record['Mes'])
+        record['Ahorro Total'] = sum(
+            parse_ahorro_amount(record[column]) or 0
+            for column in AHORRO_TOTAL_COLUMNS
+        )
+        records.append(record)
+
+    records.sort(key=lambda record: (record['_parsed_mes'], record['rowid']))
+    hypothetical_total = records[0]['Ahorro Total'] if records else 0
+    previous_month = records[0]['_parsed_mes'].strftime('%Y-%m') if records else None
+    for index, record in enumerate(records):
+        month = record['_parsed_mes'].strftime('%Y-%m')
+        if index and month != previous_month:
+            hypothetical_total += parse_ahorro_amount(
+                record['Ahorro Mensual Previsto']
+            ) or 0
+        record['Ahorro Hipotético'] = hypothetical_total
+        previous_month = month
+        record.pop('_parsed_mes')
+
+    return records
+
+
+@app.get('/api/ahorro')
+def api_ahorro():
+    conn = get_db()
+    try:
+        return jsonify({'rows': get_ahorro_records(conn)})
+    finally:
+        conn.close()
+
+
+@app.post('/api/ahorro')
+def save_ahorro():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'El cuerpo de la petición debe ser un objeto JSON'}), 400
+
+    conn = get_db()
+    try:
+        columns = {row['name'] for row in conn.execute('PRAGMA table_info(ahorro)')}
+        if not columns:
+            return jsonify({'error': 'No existe la tabla ahorro'}), 500
+
+        values = {}
+        if 'Mes' in payload:
+            try:
+                values['Mes'] = parse_ahorro_date(payload['Mes']).strftime('%d/%m/%Y')
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
+
+        for column in AHORRO_AMOUNT_COLUMNS:
+            if column in payload:
+                try:
+                    values[column] = parse_ahorro_amount(payload[column])
+                except ValueError:
+                    return jsonify({'error': f'El valor de «{column}» debe ser numérico'}), 400
+
+        for column in ('Considerado en grafica?', 'Comentarios'):
+            if column in payload:
+                value = payload[column]
+                values[column] = str(value).strip() if value not in (None, '') else None
+
+        rowid = payload.get('rowid')
+        if rowid is not None:
+            try:
+                rowid = int(rowid)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'El identificador del registro no es válido'}), 400
+            if not values:
+                return jsonify({'error': 'No hay campos válidos para guardar'}), 400
+            assignments = ', '.join(f'"{column}" = ?' for column in values)
+            cursor = conn.execute(
+                f'UPDATE ahorro SET {assignments} WHERE rowid = ?',
+                [*values.values(), rowid],
+            )
+            if cursor.rowcount == 0:
+                return jsonify({'error': 'No se encontró el registro de ahorro'}), 404
+        else:
+            if 'Mes' not in values:
+                return jsonify({'error': 'El campo Mes es obligatorio para añadir un registro'}), 400
+            insert_columns = list(values)
+            column_sql = ', '.join(f'"{column}"' for column in insert_columns)
+            placeholders = ', '.join('?' for _ in insert_columns)
+            cursor = conn.execute(
+                f'INSERT INTO ahorro ({column_sql}) VALUES ({placeholders})',
+                list(values.values()),
+            )
+            rowid = cursor.lastrowid
+
+        conn.commit()
+        return jsonify({'status': 'ok', 'rowid': rowid})
+    finally:
+        conn.close()
+
+
+@app.get('/api/config/ahorro-proyeccion')
+def api_config_ahorro_proyeccion():
+    conn = get_db()
+    try:
+        ensure_app_settings(conn)
+        conn.executemany(
+            'INSERT OR IGNORE INTO app_config (clave, valor) VALUES (?, ?)',
+            (
+                ('anios_proyeccion_ahorro', '5'),
+                ('meses_media_forecast_ahorro', '12'),
+            ),
+        )
+        conn.commit()
+        settings = {
+            row['clave']: row['valor']
+            for row in conn.execute(
+                'SELECT clave, valor FROM app_config WHERE clave IN (?, ?)',
+                ('anios_proyeccion_ahorro', 'meses_media_forecast_ahorro'),
+            )
+        }
+        try:
+            years = min(50, max(1, int(settings['anios_proyeccion_ahorro'])))
+        except (TypeError, ValueError):
+            years = 5
+        try:
+            months = min(120, max(1, int(settings['meses_media_forecast_ahorro'])))
+        except (TypeError, ValueError):
+            months = 12
+        return jsonify({
+            'anios_proyeccion_ahorro': years,
+            'meses_media_forecast_ahorro': months,
+        })
+    finally:
+        conn.close()
+
+
+@app.put('/api/config/ahorro-proyeccion')
+def api_update_config_ahorro_proyeccion():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'El cuerpo de la petición debe ser un objeto JSON'}), 400
+    supported_settings = {
+        'anios_proyeccion_ahorro': (1, 50, 'años'),
+        'meses_media_forecast_ahorro': (1, 120, 'meses'),
+    }
+    updates = {}
+    for key, (minimum, maximum, unit) in supported_settings.items():
+        if key not in payload:
+            continue
+        try:
+            value = int(payload[key])
+        except (TypeError, ValueError):
+            return jsonify({'error': f'Indica un número entero de {unit} válido'}), 400
+        if not minimum <= value <= maximum:
+            return jsonify({
+                'error': f'El rango permitido es de {minimum} a {maximum} {unit}'
+            }), 400
+        updates[key] = value
+    if not updates:
+        return jsonify({'error': 'No hay parámetros de extrapolación para actualizar'}), 400
+
+    conn = get_db()
+    try:
+        ensure_app_settings(conn)
+        conn.executemany(
+            'INSERT INTO app_config (clave, valor) VALUES (?, ?) '
+            'ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor',
+            [(key, str(value)) for key, value in updates.items()],
+        )
+        conn.commit()
+        return jsonify(updates)
+    finally:
+        conn.close()
 
 
 @app.get('/api/importar_input/preview')
