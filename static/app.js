@@ -1472,16 +1472,19 @@ function renderSavingsRows() {
       formatSavingsAmount(record['Ahorro Mensual Previsto']),
       record.Comentarios || '—',
     ];
-    values.forEach((value) => {
+    values.forEach((value, index) => {
       const cell = document.createElement('td');
       cell.textContent = value ?? '';
+      if (index === 1 || index === 2) cell.className = 'savings-amount';
       row.appendChild(cell);
     });
     const actionCell = document.createElement('td');
     const editButton = document.createElement('button');
     editButton.type = 'button';
-    editButton.className = 'secondary';
-    editButton.textContent = 'Editar';
+    editButton.className = 'action-btn';
+    editButton.title = 'Editar registro';
+    editButton.setAttribute('aria-label', 'Editar registro de ahorro');
+    editButton.textContent = '✎';
     editButton.addEventListener('click', () => openSavingsModal(record));
     actionCell.appendChild(editButton);
     row.appendChild(actionCell);

@@ -212,7 +212,6 @@
               <h2>Evolución del ahorro</h2>
               <p class="muted">El forecast de ahorro hipotético usa la previsión mensual media; el de ahorro total, el incremento mensual medio. Ambos se calculan con la ventana histórica configurada.</p>
             </div>
-            <button id="addSavingsRecord" class="primary" type="button">+ Añadir registro</button>
           </div>
           <div class="savings-chart-wrap">
             <canvas id="savingsChart" aria-label="Evolución y extrapolación del ahorro"></canvas>
@@ -222,9 +221,10 @@
         <section class="panel table-panel savings-records-panel">
           <div class="table-toolbar">
             <h2>Registros</h2>
+            <button id="addSavingsRecord" class="primary" type="button">+ Añadir registro</button>
           </div>
           <div class="table-wrap">
-            <table>
+            <table class="savings-records-table">
               <thead>
                 <tr>
                   <th>Mes</th>
@@ -546,6 +546,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="{{ url_for('static', filename='app.js') }}?v=20261018-01"></script>
+    <script src="{{ url_for('static', filename='app.js') }}?v=20261018-02"></script>
   </body>
 </html>

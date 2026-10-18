@@ -555,6 +555,16 @@ tbody tr:hover {
   margin-top: 16px;
 }
 
+.savings-records-table th {
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.savings-records-table .savings-amount {
+  text-align: left;
+  font-variant-numeric: tabular-nums;
+}
+
 .savings-modal-content {
   width: min(900px, 94vw);
 }
