@@ -1871,9 +1871,9 @@ async function saveSavingsStartDate() {
 }
 
 async function refreshDatabaseData() {
-  const originalText = refreshDataBtn.textContent;
   refreshDataBtn.disabled = true;
-  refreshDataBtn.textContent = 'Actualizando...';
+  refreshDataBtn.setAttribute('aria-label', 'Actualizando datos');
+  refreshDataBtn.title = 'Actualizando datos...';
 
   try {
     await Promise.all([loadOptions(), loadSummary()]);
@@ -1892,15 +1892,15 @@ async function refreshDatabaseData() {
     } else {
       await loadImportPreview();
     }
-    refreshDataBtn.textContent = 'Actualizado';
+    refreshDataBtn.setAttribute('aria-label', 'Actualizado');
     refreshDataBtn.title = 'Datos actualizados desde la base de datos';
   } catch (error) {
-    refreshDataBtn.textContent = 'Error al actualizar';
+    refreshDataBtn.setAttribute('aria-label', 'Error al actualizar');
     refreshDataBtn.title = error.message;
   } finally {
     refreshDataBtn.disabled = false;
     window.setTimeout(() => {
-      refreshDataBtn.textContent = originalText;
+      refreshDataBtn.setAttribute('aria-label', 'Actualizar');
       refreshDataBtn.title = 'Actualizar datos desde la base de datos';
     }, 1800);
   }
