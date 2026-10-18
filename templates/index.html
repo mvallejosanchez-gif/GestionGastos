@@ -1,0 +1,462 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gestión de gastos</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
+  </head>
+  <body>
+    <div class="container">
+      <header class="topbar">
+        <div>
+          <h1>Gastos</h1>
+        </div>
+        <div class="topbar-actions">
+          <button id="refreshDataBtn" class="secondary" type="button" title="Actualizar datos desde la base de datos">↻ Actualizar</button>
+          <div id="summary" class="summary"></div>
+        </div>
+      </header>
+
+      <nav class="tabs" aria-label="Secciones">
+        <button id="tabDashboard" class="tab active" type="button">Resumen</button>
+        <button id="tabBalances" class="tab" type="button">Saldos</button>
+        <button id="tabMovimientos" class="tab" type="button">Movimientos</button>
+        <button id="tabImport" class="tab" type="button">Importar</button>
+        <button id="tabBudgets" class="tab" type="button">Presupuestos</button>
+        <button id="tabConfig" class="tab config-tab" type="button" aria-label="Configuración" title="Configuración"><span aria-hidden="true">⚙</span></button>
+      </nav>
+
+      <section id="movimientosView" class="view">
+        <section class="filters panel">
+          <div class="field-group wide">
+            <label for="searchInput">Buscar</label>
+            <input id="searchInput" type="search" placeholder="Concepto, movimiento, observaciones..." />
+          </div>
+
+          <div class="field-group">
+            <label for="fuenteFilter">Fuente</label>
+            <select id="fuenteFilter"></select>
+          </div>
+
+          <div class="field-group">
+            <label for="categoriaFilter">Categoría</label>
+            <select id="categoriaFilter"></select>
+          </div>
+
+          <div class="field-group">
+            <label for="dateStartFilter">Desde</label>
+            <input id="dateStartFilter" type="date" />
+          </div>
+
+          <div class="field-group">
+            <label for="dateEndFilter">Hasta</label>
+            <input id="dateEndFilter" type="date" />
+          </div>
+
+          <div class="actions">
+            <button id="newMovement" class="primary" type="button">+ Nueva línea</button>
+            <button id="resetFilters" class="secondary" type="button">Limpiar</button>
+          </div>
+        </section>
+
+        <section class="panel table-panel">
+          <div class="table-toolbar">
+            <span id="movimientosCount" class="count-pill">0 registros</span>
+            <div class="toolbar-actions">
+              <button id="exportExcel" class="primary" type="button">Descargar Excel</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Fuente</th>
+                  <th>Fecha</th>
+                  <th>Concepto</th>
+                  <th>Movimiento</th>
+                  <th>Importe</th>
+                  <th>Disponible</th>
+                  <th>Categoría</th>
+                  <th>Comentarios</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="movimientosBody"></tbody>
+            </table>
+          </div>
+
+          <div class="pagination">
+            <button id="prevPage" type="button">Anterior</button>
+            <span id="pageInfo">Página 1</span>
+            <button id="nextPage" type="button">Siguiente</button>
+          </div>
+        </section>
+      </section>
+
+      <section id="dashboardView" class="view active">
+        <div class="panel dashboard-panel">
+          <div class="dashboard-header">
+            <div class="dashboard-filter">
+              <span class="label-inline">Bancos</span>
+              <div id="dashboardBankButtons" class="bank-toggle-group"></div>
+            </div>
+            <div class="summary-card large dashboard-total-card">
+              <span class="label">Total general</span>
+              <span id="dashboardTotal" class="value">0,00 €</span>
+            </div>
+          </div>
+
+          <div class="dashboard-category-filter">
+            <button id="clearDashboardCategoryFilter" class="secondary" type="button" disabled>Limpiar categoría</button>
+          </div>
+
+          <div class="dashboard-range panel-soft">
+            <div class="date-range-header">
+              <span>Rango de fechas</span>
+              <span id="dashboardDateLabel" class="date-range-label">—</span>
+            </div>
+            <div class="date-range-shortcuts" aria-label="Accesos rápidos de fecha">
+              <button id="clearDashboardDateFilter" type="button" class="range-shortcut" data-range="all">Todas las fechas</button>
+              <button type="button" class="range-shortcut" data-range="year">Último año</button>
+              <button type="button" class="range-shortcut" data-range="prev-month">Mes anterior</button>
+              <button type="button" class="range-shortcut" data-range="current-month">Mes actual</button>
+            </div>
+            <div class="range-slider-wrap">
+              <input id="dateStartSlider" type="range" min="0" max="1" step="1" value="0" />
+              <input id="dateEndSlider" type="range" min="0" max="1" step="1" value="1" />
+            </div>
+            <div class="range-scale">
+              <span id="dateRangeStartText">—</span>
+              <span id="dateRangeEndText">—</span>
+            </div>
+          </div>
+
+          <div id="dashboardVisuals" class="dashboard-visuals">
+            <section class="dashboard-box dashboard-category-box">
+              <h3>Categoría 0</h3>
+              <div class="dashboard-category-chart">
+                <div id="dashboardChart0" class="donut-chart" aria-label="Gráfico por categoría 0"></div>
+                <div id="dashboardChartLegend0" class="chart-legend"></div>
+              </div>
+              <table>
+                <thead><tr><th>Categoría</th><th class="text-right">Total</th></tr></thead>
+                <tbody id="dashboardBody0"></tbody>
+              </table>
+            </section>
+
+            <section class="dashboard-box dashboard-category-box">
+              <h3>Categoría 1</h3>
+              <div class="dashboard-category-chart">
+                <div id="dashboardChart1" class="donut-chart" aria-label="Gráfico por categoría 1"></div>
+                <div id="dashboardChartLegend1" class="chart-legend"></div>
+              </div>
+              <table>
+                <thead><tr><th>Categoría</th><th class="text-right">Total</th></tr></thead>
+                <tbody id="dashboardBody1"></tbody>
+              </table>
+            </section>
+
+            <section class="dashboard-box dashboard-category-box">
+              <h3>Categoría 2</h3>
+              <div class="dashboard-category-chart">
+                <div id="dashboardChart2" class="donut-chart" aria-label="Gráfico por categoría 2"></div>
+                <div id="dashboardChartLegend2" class="chart-legend"></div>
+              </div>
+              <table>
+                <thead><tr><th>Categoría</th><th class="text-right">Total</th></tr></thead>
+                <tbody id="dashboardBody2"></tbody>
+              </table>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section id="balancesView" class="view">
+        <section class="panel table-panel">
+          <div class="balance-history-header">
+            <h2>Saldo diario</h2>
+            <span id="balanceChartSummary" class="muted"></span>
+          </div>
+          <div class="balance-chart-wrap" id="balanceChartWrap">
+            <svg id="balanceHistoryChart" viewBox="0 0 1100 340" role="img" aria-label="Saldo por día del mes comparado con media, mínimo y máximo históricos"></svg>
+            <div id="balanceChartTooltip" class="balance-chart-tooltip" hidden></div>
+          </div>
+          <div id="balanceChartLegend" class="balance-chart-legend"></div>
+          <div class="table-wrap balance-table-wrap">
+            <table class="balance-table">
+              <thead>
+                <tr>
+                  <th>Día</th>
+                  <th class="text-right">Mes actual</th>
+                  <th class="text-right">Saldo medio</th>
+                  <th class="text-right">Saldo mínimo</th>
+                  <th>Fecha mínimo</th>
+                  <th class="text-right">Saldo máximo</th>
+                  <th>Fecha máximo</th>
+                </tr>
+              </thead>
+              <tbody id="balanceHistoryRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="importView" class="view">
+        <section class="panel table-panel">
+          <div class="table-toolbar">
+            <span id="importSummaryBadge" class="count-pill">0 registros</span>
+            <div class="toolbar-actions">
+              <button id="confirmImportTabBtn" class="primary" type="button" disabled>Importar seleccionados</button>
+            </div>
+          </div>
+
+          <div id="importStatusText" class="import-summary">Cargando registros pendientes...</div>
+
+          <div class="import-filters">
+            <label class="field-group">
+              Banco
+              <select id="importBankFilter"><option value="">Todos los bancos</option></select>
+            </label>
+            <label class="field-group">
+              Buscar
+              <input id="importSearchInput" type="search" placeholder="Archivo, concepto, movimiento o fecha..." />
+            </label>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th class="selection-cell"><input id="importSelectAll" type="checkbox" title="Seleccionar todos los registros visibles" aria-label="Seleccionar todos los registros visibles" /></th>
+                  <th>Banco</th>
+                  <th>Archivo</th>
+                  <th>Fecha</th>
+                  <th>Concepto</th>
+                  <th>Movimiento</th>
+                  <th>Importe</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="importTabRows"></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section id="configView" class="view">
+        <section class="panel table-panel">
+          <div class="table-toolbar">
+            <h2>Parámetros de cuentas</h2>
+          </div>
+          <div id="accountConfigStatus" class="import-summary" role="status"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Cuenta</th>
+                  <th>Saldo excluido del disponible</th>
+                  <th>Incluir en saldos</th>
+                </tr>
+              </thead>
+              <tbody id="accountConfigBody"></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="panel balance-config-panel">
+          <h2>Histórico del saldo</h2>
+          <p class="muted">Define cuántos meses completos se usan para calcular la media, el mínimo y el máximo diarios.</p>
+          <div class="balance-config-controls">
+            <label class="field-group" for="balanceHistoryMonths">
+              Meses de histórico
+              <input id="balanceHistoryMonths" type="number" min="1" max="60" step="1" value="18" />
+            </label>
+          </div>
+          <p id="balanceHistoryConfigStatus" class="import-summary" role="status"></p>
+        </section>
+      </section>
+
+      <section id="budgetsView" class="view">
+        <section class="panel table-panel">
+          <div class="budget-toolbar">
+            <h2>Presupuestos mensuales</h2>
+            <label class="field-group" for="budgetMonth">
+              Mes
+              <input id="budgetMonth" type="month" />
+            </label>
+          </div>
+          <div id="budgetSummary" class="budget-summary"></div>
+          <div class="table-wrap">
+            <table class="budget-table">
+              <thead>
+                <tr>
+                  <th>Categoría 1</th>
+                  <th>Categoría 2</th>
+                  <th class="text-right">Presupuesto mes</th>
+                  <th class="text-right">Real mes</th>
+                  <th class="text-right">Diferencia</th>
+                </tr>
+              </thead>
+              <tbody id="budgetRows"></tbody>
+              <tfoot id="budgetTotals"></tfoot>
+            </table>
+          </div>
+        </section>
+      </section>
+    </div>
+
+    <div id="editModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-content modal-compact">
+        <div class="modal-header">
+          <h2 id="modalTitle">Editar movimiento</h2>
+          <button id="closeModal" type="button" class="close">×</button>
+        </div>
+
+        <div class="modal-body">
+          <form id="editForm">
+            <input type="hidden" name="id" />
+
+            <div class="form-grid">
+              <label>
+                Fuente
+                <input name="fuente" type="text" />
+              </label>
+              <label>
+                Fecha
+                <input name="fecha" type="text" />
+              </label>
+              <label>
+                F. valor
+                <input name="f_valor" type="text" />
+              </label>
+              <label>
+                Importe
+                <span class="currency-input">
+                  <input name="importe_cent" type="text" inputmode="decimal" />
+                  <span class="currency-symbol" aria-hidden="true">€</span>
+                </span>
+              </label>
+              <label>
+                Divisa
+                <input name="divisa" type="text" />
+              </label>
+              <label>
+                Disponible
+                <span class="currency-input">
+                  <input name="disponible_cent" type="text" inputmode="decimal" />
+                  <span class="currency-symbol" aria-hidden="true">€</span>
+                </span>
+              </label>
+              <label>
+                Categoría
+                <select name="categoria2"></select>
+              </label>
+              <label>
+                Clave
+                <input name="clave" type="text" />
+              </label>
+              <label class="full-width">
+                Concepto
+                <input name="concepto" type="text" />
+              </label>
+              <label class="full-width">
+                Movimiento
+                <input name="movimiento" type="text" />
+              </label>
+              <label class="full-width">
+                Observaciones
+                <textarea name="observaciones" rows="2"></textarea>
+              </label>
+              <label class="full-width">
+                Comentarios
+                <textarea name="comentarios" rows="2"></textarea>
+              </label>
+              <label class="full-width">
+                Comentarios 2
+                <textarea name="comentarios2" rows="2"></textarea>
+              </label>
+            </div>
+
+            <div class="modal-actions">
+              <button type="submit" class="primary">Guardar</button>
+              <button type="button" class="secondary" id="cancelModal">Cancelar</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div id="categoryModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-content confirm-modal-content">
+        <div class="modal-header">
+          <h2 id="categoryModalTitle">Cambiar categoría</h2>
+          <button id="closeCategoryModal" type="button" class="close" aria-label="Cerrar">×</button>
+        </div>
+        <form id="categoryForm">
+          <p id="categoryMovementSummary" class="import-summary"></p>
+          <label class="field-group" for="quickCategorySelect">
+            Nueva categoría
+            <select id="quickCategorySelect" required></select>
+          </label>
+          <p id="categoryModalError" class="category-modal-error" role="alert"></p>
+          <div class="modal-actions">
+            <button id="saveQuickCategoryBtn" type="submit" class="primary">Guardar categoría</button>
+            <button id="cancelCategoryModal" type="button" class="secondary">Cancelar</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="deleteConfirmModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-content confirm-modal-content">
+        <div class="modal-header">
+          <h2>Confirmar eliminación</h2>
+          <button id="closeDeleteModal" type="button" class="close">×</button>
+        </div>
+
+        <p id="deleteConfirmText">¿Seguro que quieres borrar este movimiento?</p>
+
+        <div class="modal-actions">
+          <button type="button" class="secondary" id="cancelDeleteModal">Cancelar</button>
+          <button type="button" class="primary danger-btn" id="confirmDeleteBtn">Borrar</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="importPreviewModal" class="modal hidden" aria-hidden="true">
+      <div class="modal-content import-preview-content">
+        <div class="modal-header">
+          <h2>Importar desde input</h2>
+          <button id="closeImportPreviewModal" type="button" class="close">×</button>
+        </div>
+
+        <p id="importPreviewSummary" class="import-summary">Comprobando registros pendientes...</p>
+
+        <div class="import-preview-table-wrap">
+          <table class="import-preview-table">
+            <thead>
+              <tr>
+                <th>Banco</th>
+                <th>Archivo</th>
+                <th>Fecha</th>
+                <th>Concepto</th>
+                <th>Movimiento</th>
+                <th>Importe</th>
+              </tr>
+            </thead>
+            <tbody id="importPreviewRows"></tbody>
+          </table>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="secondary" id="cancelImportPreviewBtn">Cancelar</button>
+          <button type="button" class="primary" id="confirmImportBtn">Importar</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='app.js') }}?v=20261012-03"></script>
+  </body>
+</html>
