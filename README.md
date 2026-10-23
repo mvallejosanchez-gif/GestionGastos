@@ -81,7 +81,7 @@ El importador reconoce, según el nombre y el contenido del archivo:
 - Excel de Pibank, BBVA y Bankinter
 - Excel de movimientos en efectivo (`gastos_...`)
 
-Los archivos que no coincidan con los formatos esperados se ignoran. Las nuevas categorías y fuentes se incorporan durante la importación; los movimientos sin categoría quedan como `PENDIENTE`. Los importes se almacenan en céntimos.
+Los archivos que no coincidan con los formatos esperados se ignoran. En los extractos de Revolut, si falta la fecha de finalización se usa la fecha de inicio, y se omiten los movimientos que no tengan ninguna fecha. Las nuevas categorías y fuentes se incorporan durante la importación; los movimientos sin categoría quedan como `PENDIENTE`. Los importes se almacenan en céntimos.
 
 También se puede ejecutar el importador desde la raíz del proyecto:
 

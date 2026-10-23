@@ -2146,6 +2146,15 @@ document.getElementById('cancelCategoryModal').addEventListener('click', closeCa
 categoryModal.addEventListener('click', (event) => {
   if (event.target === categoryModal) closeCategoryModal();
 });
+quickCategorySelect.addEventListener('keydown', (event) => {
+  if (event.key !== 'Enter' || event.isComposing || event.repeat || saveQuickCategoryBtn.disabled) return;
+
+  window.setTimeout(() => {
+    if (saveQuickCategoryBtn.disabled) return;
+    categoryForm.requestSubmit(saveQuickCategoryBtn);
+    if (!saveQuickCategoryBtn.disabled) saveQuickCategoryBtn.focus();
+  }, 0);
+});
 categoryForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (!categoryMovementId || !quickCategorySelect.value) return;

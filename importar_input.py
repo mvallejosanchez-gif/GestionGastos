@@ -304,11 +304,20 @@ def parse_revolut_csv(path: Path):
     rows = []
     df = pd.read_csv(path, encoding='utf-8-sig')
     for _, row in df.iterrows():
+        fecha = _row_value(row, ['Fecha de inicio', 'Fecha']) or _row_value(
+            row, ['Fecha de finalización', 'Fecha de cierre']
+        )
+        f_valor = _row_value(
+            row, ['Fecha de finalización', 'Fecha de cierre', 'Fecha']
+        ) or fecha
+        if f_valor is None:
+            continue
+
         importe_cent = money_to_cents(row.get('Importe')) - money_to_cents(row.get('Comisión'))
         rows.append({
             'fuente': 'REVOLUT',
-            'f_valor': row.get('Fecha de finalización') or row.get('Fecha de cierre') or row.get('Fecha'),
-            'fecha': row.get('Fecha de inicio') or row.get('Fecha de inicio') or row.get('Fecha'),
+            'f_valor': f_valor,
+            'fecha': fecha or f_valor,
             'concepto': row.get('Descripción') or row.get('Description') or 'Revolut',
             'movimiento': row.get('Tipo') or row.get('Type') or 'Movimiento',
             'importe_cent': importe_cent,
@@ -459,12 +468,16 @@ def parse_efectivo_xlsx(path: Path):
     for _, row in df.iterrows():
         if row.isna().all():
             continue
+        movimiento = normalize_text(row.get('Movimiento')) or normalize_text(row.get('Tipo')) or 'Movimiento'
+        if movimiento.casefold() == 'interno':
+            continue
+
         rows.append({
             'fuente': 'EFECTIVO',
             'f_valor': row.get('Fecha') or row.get('F.Valor') or row.get('F. Valor'),
             'fecha': row.get('Fecha') or row.get('F. Valor') or row.get('F.Valor'),
             'concepto': row.get('Concepto') or row.get('Descripción') or 'Efectivo',
-            'movimiento': row.get('Movimiento') or 'Movimiento',
+            'movimiento': movimiento,
             'importe_cent': money_to_cents(row.get('Importe') or row.get('Importe (€)') or 0),
             'divisa': 'EUR',
             'observaciones': row.get('Observaciones') or '',
@@ -500,7 +513,7 @@ def normalize_bank_filename(name: str | Path) -> str:
 def detect_parser(path: Path):
     name = normalize_bank_filename(path.name)
     for token, parser in FILE_PARSERS:
-        if token in name:
+        if normalize_bank_filename(token) in name:
             return parser
 
     if path.suffix.lower() == '.csv':

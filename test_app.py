@@ -10,6 +10,7 @@ import pandas as pd
 
 from AppGastos import app, DB_PATH
 from importar_input import (
+    collect_input_rows,
     import_files,
     insert_rows,
     parse_bbva_xlsx,
@@ -691,6 +692,9 @@ class GastosAppTests(unittest.TestCase):
                 'Transferir,Actual,2026-10-03 17:24:26,,To MANUEL VALLEJO SÁNCHEZ,-10.00,0.00,EUR,PENDIENTE,\n',
                 encoding='utf-8',
             )
+            parsed_row = parse_revolut_csv(csv_path)[0]
+            self.assertEqual(parsed_row['f_valor'], '2026-10-03 17:24:26')
+            self.assertEqual(parsed_row['fecha'], '2026-10-03 17:24:26')
 
             db_path = Path(tmpdir) / 'gastos.db'
             conn = sqlite3.connect(db_path)
@@ -717,12 +721,56 @@ class GastosAppTests(unittest.TestCase):
             self.assertEqual(preview['count'], 0)
             self.assertEqual(result['inserted'], 0)
 
+    def test_revolut_skips_transactions_without_any_date(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / 'account-statement_2026-10.csv'
+            csv_path.write_text(
+                'Tipo,Producto,Fecha de inicio,Fecha de finalización,Descripción,Importe,Comisión,Divisa,State,Saldo\n'
+                'Pago con tarjeta,,,,Sprinter,-34.99,0.00,EUR,COMPLETED,\n',
+                encoding='utf-8',
+            )
+
+            self.assertEqual(parse_revolut_csv(csv_path), [])
+
     def test_detect_parser_accepts_xls_and_accented_names(self):
         from importar_input import detect_parser
 
         self.assertIsNotNone(detect_parser(Path('Movimientos_2026_10_12.xls')))
         self.assertIsNotNone(detect_parser(Path('2026Y-10M-12D-21_51_05-Últimos movimientos.xlsx')))
         self.assertIsNotNone(detect_parser(Path('Movimientos_ES4602353141190272875725_12-10-2026.xls')))
+
+    def test_importer_detects_timestamped_cash_workbook(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_dir = Path(tmpdir)
+            pd.DataFrame([
+                {
+                    'Fecha': '23/10/2026',
+                    'Hora': '20:18',
+                    'Tipo': ' Interno ',
+                    'Importe': -15.00,
+                    'Descripción': 'Movimiento interno',
+                    'Lugar': None,
+                    'Disponible': 30.00,
+                },
+                {
+                    'Fecha': '23/10/2026',
+                    'Hora': '20:19',
+                    'Tipo': 'Gasto',
+                    'Importe': -34.99,
+                    'Descripción': 'Compra en efectivo',
+                    'Lugar': None,
+                    'Disponible': 10.01,
+                },
+            ]).to_excel(input_dir / 'gastos_20261023_201841.xlsx', index=False)
+
+            rows, processed_files = collect_input_rows(input_dir)
+
+            self.assertEqual(processed_files, 1)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]['fuente'], 'EFECTIVO')
+            self.assertEqual(rows[0]['f_valor'], '23/10/2026')
+            self.assertEqual(rows[0]['movimiento'], 'Gasto')
+            self.assertEqual(rows[0]['importe_cent'], -3499)
 
     def test_money_to_cents_handles_bank_formats(self):
         from importar_input import money_to_cents
