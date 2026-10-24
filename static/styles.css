@@ -285,7 +285,8 @@ button.secondary {
 }
 
 .table-wrap {
-  overflow-x: auto;
+  max-height: min(65vh, 560px);
+  overflow: auto;
 }
 
 table {
@@ -295,6 +296,16 @@ table {
 
 .table-wrap table {
   min-width: 1100px;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.table-wrap thead th,
+.import-preview-table-wrap thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fafcff;
 }
 
 .dashboard-movements {
@@ -318,12 +329,32 @@ table {
   min-width: 760px;
 }
 
-.dashboard-movements-table th:nth-child(3) {
-  min-width: 280px;
+.dashboard-movements-table-wrap {
+  max-height: min(65vh, 560px);
+  overflow: auto;
 }
 
-.dashboard-movements-pagination {
-  justify-content: flex-end;
+.dashboard-category-table-wrap {
+  max-height: 240px;
+  overflow: auto;
+}
+
+.dashboard-movements-table-wrap table,
+.dashboard-category-table-wrap table {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.dashboard-movements-table-wrap th,
+.dashboard-category-table-wrap th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fafcff;
+}
+
+.dashboard-movements-table th:nth-child(3) {
+  min-width: 280px;
 }
 
 th,
@@ -437,14 +468,59 @@ tbody tr:hover {
 .budget-table .budget-group-row td {
   border-top: 1px solid var(--border);
   font-weight: 700;
+  cursor: pointer;
+}
+
+.budget-table .budget-group-toggle {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.budget-table .budget-group-toggle::before {
+  content: "▶";
+  display: inline-block;
+  margin-right: 8px;
+  font-size: 0.7em;
+  transition: transform 0.15s ease;
+}
+
+.budget-table .budget-group-toggle[aria-expanded="true"]::before {
+  transform: rotate(90deg);
+}
+
+.budget-table .budget-detail-row[hidden] {
+  display: none;
 }
 
 .budget-table .budget-detail-row td:first-child {
   width: 24%;
 }
 
+.budget-table .budget-detail-row {
+  cursor: pointer;
+}
+
 .budget-table .budget-detail-row td:nth-child(2) {
   padding-left: 22px;
+}
+
+.budget-transactions-row td {
+  padding: 8px 12px 14px 34px;
+  background: #fafcff;
+  cursor: default;
+}
+
+.budget-transactions-table {
+  min-width: 680px;
+}
+
+.budget-transactions-table th {
+  font-size: 0.72rem;
 }
 
 .budget-table .budget-grand-total td {
@@ -494,21 +570,10 @@ tbody tr:hover {
   font-weight: 700;
 }
 
-.pagination {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 10px;
-  margin-top: 16px;
-}
-
-.pagination > button:last-child {
-  margin-left: auto;
-}
-
 .modal {
   position: fixed;
   inset: 0;
+  z-index: 1000;
   background: rgba(13, 25, 42, 0.42);
   display: flex;
   align-items: center;
@@ -1136,6 +1201,8 @@ tbody tr:hover {
 
 .import-preview-table {
   min-width: 680px;
+  border-collapse: separate;
+  border-spacing: 0;
 }
 
 .empty {

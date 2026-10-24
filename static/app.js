@@ -1,6 +1,4 @@
 const state = {
-  page: 1,
-  limit: 50,
   total: 0,
   q: '',
   fuente: '',
@@ -8,6 +6,18 @@ const state = {
   dateStart: '',
   dateEnd: '',
 };
+const movimientosPageSize = 100;
+let movimientosPage = 0;
+let movimientosLoading = false;
+let movimientosRequestId = 0;
+const movimientoRecords = new Map();
+const dashboardMovementsPageSize = 100;
+let dashboardMovementsPage = 0;
+let dashboardMovementsTotal = 0;
+let dashboardMovementsLoading = false;
+let dashboardMovementsRequestId = 0;
+let dashboardMovementsParams = new URLSearchParams();
+let dashboardRequestId = 0;
 
 const summaryEl = document.getElementById('summary');
 const refreshDataBtn = document.getElementById('refreshDataBtn');
@@ -15,10 +25,7 @@ const tableBody = document.getElementById('movimientosBody');
 const searchInput = document.getElementById('searchInput');
 const fuenteFilter = document.getElementById('fuenteFilter');
 const categoriaFilter = document.getElementById('categoriaFilter');
-const pageInfoEl = document.getElementById('pageInfo');
 const movimientosCountEl = document.getElementById('movimientosCount');
-const prevPageBtn = document.getElementById('prevPage');
-const nextPageBtn = document.getElementById('nextPage');
 const newMovementBtn = document.getElementById('newMovement');
 const dateStartFilter = document.getElementById('dateStartFilter');
 const dateEndFilter = document.getElementById('dateEndFilter');
@@ -59,9 +66,11 @@ const accountConfigStatus = document.getElementById('accountConfigStatus');
 const balanceHistoryMonthsInput = document.getElementById('balanceHistoryMonths');
 const balanceHistoryConfigStatus = document.getElementById('balanceHistoryConfigStatus');
 const budgetMonth = document.getElementById('budgetMonth');
-const budgetSummary = document.getElementById('budgetSummary');
 const budgetRows = document.getElementById('budgetRows');
 const budgetTotals = document.getElementById('budgetTotals');
+const budgetBudgetHeader = document.getElementById('budgetBudgetHeader');
+const budgetActualHeader = document.getElementById('budgetActualHeader');
+const budgetMovementCache = new Map();
 const savingsRows = document.getElementById('savingsRows');
 const savingsChartCanvas = document.getElementById('savingsChart');
 const savingsStatus = document.getElementById('savingsStatus');
@@ -116,13 +125,10 @@ const dateRangeStartText = document.getElementById('dateRangeStartText');
 const dateRangeEndText = document.getElementById('dateRangeEndText');
 const dashboardMovementsSummary = document.getElementById('dashboardMovementsSummary');
 const dashboardMovementsRows = document.getElementById('dashboardMovementsRows');
-const dashboardMovementsPageLabel = document.getElementById('dashboardMovementsPage');
-const dashboardMovementsPrevious = document.getElementById('dashboardMovementsPrevious');
-const dashboardMovementsNext = document.getElementById('dashboardMovementsNext');
+const dashboardMovementsWrap = dashboardMovementsRows.closest('.table-wrap');
+const movimientosTableWrap = tableBody.closest('.table-wrap');
 
 let selectedBanks = null;
-let dashboardMovementsPage = 1;
-let dashboardFilterKey = null;
 let selectedDashboardCategories = {
   categoria0: null,
   categoria1: null,
@@ -547,10 +553,10 @@ function renderDashboard(data) {
   });
 }
 
-function renderDashboardMovements(data) {
+function renderDashboardMovements(data, append = false) {
   const items = data.items || [];
-  dashboardMovementsRows.replaceChildren();
-  if (!items.length) {
+  if (!append) dashboardMovementsRows.replaceChildren();
+  if (!items.length && !append) {
     const row = document.createElement('tr');
     const cell = document.createElement('td');
     cell.colSpan = 6;
@@ -558,34 +564,39 @@ function renderDashboardMovements(data) {
     cell.textContent = 'No hay movimientos para los filtros seleccionados.';
     row.appendChild(cell);
     dashboardMovementsRows.appendChild(row);
-  } else {
-    items.forEach((item) => {
-      const row = document.createElement('tr');
-      [
-        formatShortDate(item.f_valor || item.fecha),
-        item.fuente || '—',
-        item.concepto || '—',
-        item.movimiento || '—',
-        item.categoria2 || '(blank)',
-      ].forEach((value) => {
-        const cell = document.createElement('td');
-        cell.textContent = value;
-        row.appendChild(cell);
-      });
-      const amount = document.createElement('td');
-      amount.className = 'money-cell';
-      amount.textContent = formatMoneyFromCents(item.importe_cent);
-      row.appendChild(amount);
-      dashboardMovementsRows.appendChild(row);
-    });
+    dashboardMovementsSummary.textContent = `${data.total} movimientos`;
+    return;
   }
 
-  const pages = Number(data.pages || 1);
-  const page = Number(data.page || 1);
-  dashboardMovementsSummary.textContent = `${data.total} movimientos · ${page}/${pages}`;
-  dashboardMovementsPageLabel.textContent = `Página ${page} de ${pages}`;
-  dashboardMovementsPrevious.disabled = page <= 1;
-  dashboardMovementsNext.disabled = page >= pages;
+  const fragment = document.createDocumentFragment();
+  items.forEach((item) => {
+    const row = document.createElement('tr');
+    [
+      formatShortDate(item.f_valor || item.fecha),
+      item.fuente || '—',
+      item.concepto || '—',
+      item.movimiento || '—',
+      item.categoria2 || '(blank)',
+    ].forEach((value) => {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      row.appendChild(cell);
+    });
+    const amount = document.createElement('td');
+    amount.className = 'money-cell';
+    amount.textContent = formatMoneyFromCents(item.importe_cent);
+    row.appendChild(amount);
+    fragment.appendChild(row);
+  });
+  dashboardMovementsRows.appendChild(fragment);
+  const table = dashboardMovementsRows.closest('table');
+  const sort = tableSortStates.get(table);
+  if (!append) {
+    applyDefaultTableSort(dashboardMovementsRows);
+  } else if (sort) {
+    setTableSort(table, sort.columnIndex, sort.direction, [dashboardMovementsRows]);
+  }
+  dashboardMovementsSummary.textContent = `${data.total} movimientos`;
 }
 
 function createBalanceSvgElement(name, attributes = {}, text = null) {
@@ -988,82 +999,116 @@ async function confirmImportAndRefresh() {
   }
 }
 
-function renderMovimientos(items) {
-  if (!items.length) {
+function renderMovimientos(items, append = false) {
+  if (!append) {
+    tableBody.replaceChildren();
+    movimientoRecords.clear();
+  }
+  if (!items.length && !append) {
     tableBody.innerHTML = '<tr><td colspan="10" class="empty">No hay movimientos para esta búsqueda.</td></tr>';
     return;
   }
 
-  tableBody.innerHTML = items
-    .map(
-      (item) => `
-        <tr>
-          <td>${item.id}</td>
-          <td>${item.fuente || '—'}</td>
-          <td>${formatShortDate(item.f_valor || item.fecha)}</td>
-          <td>${item.concepto || '—'}</td>
-          <td>${item.movimiento || '—'}</td>
-          <td class="money-cell">${money(item.importe_cent)}</td>
-          <td class="money-cell">${money(item.disponible_calculado_cent)}</td>
-          <td><button class="badge category-edit-btn" type="button" data-id="${item.id}" title="Cambiar categoría" aria-label="Cambiar categoría del movimiento ${item.id}">${item.categoria2 || '—'}</button></td>
-          <td>${item.comentarios || '—'}</td>
-          <td>
-            <div class="row-actions">
-              <button class="action-btn edit-btn" type="button" data-id="${item.id}" title="Editar" aria-label="Editar movimiento ${item.id}">✎</button>
-              <button class="action-btn clone-btn" type="button" data-id="${item.id}" title="Clonar" aria-label="Clonar movimiento ${item.id}">⧉</button>
-              <button class="action-btn delete-btn" type="button" data-id="${item.id}" title="Borrar" aria-label="Borrar movimiento ${item.id}">🗑</button>
-            </div>
-          </td>
-        </tr>
-      `
-    )
-    .join('');
-  applyDefaultTableSort(tableBody);
-
-  tableBody.querySelectorAll('.category-edit-btn').forEach((button) => {
-    button.addEventListener('click', () => {
-      const item = items.find((movement) => String(movement.id) === button.dataset.id);
-      if (item) openCategoryModal(item);
+  const fragment = document.createDocumentFragment();
+  items.forEach((item) => {
+    movimientoRecords.set(String(item.id), item);
+    const row = document.createElement('tr');
+    [
+      item.id,
+      item.fuente || '—',
+      formatShortDate(item.f_valor || item.fecha),
+      item.concepto || '—',
+      item.movimiento || '—',
+    ].forEach((value) => {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      row.appendChild(cell);
     });
-  });
 
-  tableBody.querySelectorAll('.edit-btn').forEach((button) => {
-    button.addEventListener('click', async () => {
-      const row = await fetchJson(`/api/movimientos/${button.dataset.id}`);
-      openEditModal(row);
+    [item.importe_cent, item.disponible_calculado_cent].forEach((value) => {
+      const cell = document.createElement('td');
+      cell.className = 'money-cell';
+      cell.textContent = money(value);
+      row.appendChild(cell);
     });
-  });
 
-  tableBody.querySelectorAll('.clone-btn').forEach((button) => {
-    button.addEventListener('click', async () => {
-      await fetchJson(`/api/movimientos/${button.dataset.id}/clone`, { method: 'POST' });
-      await loadMovimientos();
-      await loadSummary();
+    const categoryCell = document.createElement('td');
+    const categoryButton = document.createElement('button');
+    categoryButton.className = 'badge category-edit-btn';
+    categoryButton.type = 'button';
+    categoryButton.dataset.id = String(item.id);
+    categoryButton.title = 'Cambiar categoría';
+    categoryButton.setAttribute('aria-label', `Cambiar categoría del movimiento ${item.id}`);
+    categoryButton.textContent = item.categoria2 || '—';
+    categoryCell.appendChild(categoryButton);
+    row.appendChild(categoryCell);
+
+    const commentsCell = document.createElement('td');
+    commentsCell.textContent = item.comentarios || '—';
+    row.appendChild(commentsCell);
+
+    const actionsCell = document.createElement('td');
+    const actions = document.createElement('div');
+    actions.className = 'row-actions';
+    [
+      ['edit-btn', 'Editar', 'Editar movimiento', '✎'],
+      ['clone-btn', 'Clonar', 'Clonar movimiento', '⧉'],
+      ['delete-btn', 'Borrar', 'Borrar movimiento', '🗑'],
+    ].forEach(([className, title, label, text]) => {
+      const button = document.createElement('button');
+      button.className = `action-btn ${className}`;
+      button.type = 'button';
+      button.dataset.id = String(item.id);
+      button.title = title;
+      button.setAttribute('aria-label', `${label} ${item.id}`);
+      button.textContent = text;
+      actions.appendChild(button);
     });
+    actionsCell.appendChild(actions);
+    row.appendChild(actionsCell);
+    fragment.appendChild(row);
   });
+  tableBody.appendChild(fragment);
 
-  tableBody.querySelectorAll('.delete-btn').forEach((button) => {
-    button.addEventListener('click', () => {
-      pendingDeleteId = button.dataset.id;
-      deleteConfirmText.textContent = `¿Seguro que quieres borrar el movimiento ${pendingDeleteId}?`;
-      deleteConfirmModal.classList.remove('hidden');
-      deleteConfirmModal.setAttribute('aria-hidden', 'false');
-    });
-  });
-}
-
-function updatePagination() {
-  const pages = Math.max(1, Math.ceil(state.total / state.limit));
-  prevPageBtn.disabled = state.page <= 1;
-  nextPageBtn.disabled = state.page >= pages;
-  pageInfoEl.textContent = `Página ${state.page} / ${pages}`;
-
-  if (state.total === 1) {
-    movimientosCountEl.textContent = '1 registro';
-  } else {
-    movimientosCountEl.textContent = `${state.total} registros`;
+  const table = tableBody.closest('table');
+  const sort = tableSortStates.get(table);
+  if (!append) {
+    applyDefaultTableSort(tableBody);
+  } else if (sort) {
+    setTableSort(table, sort.columnIndex, sort.direction, [tableBody]);
   }
 }
+
+tableBody.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-id]');
+  if (!button || !tableBody.contains(button)) return;
+
+  const id = button.dataset.id;
+  if (button.classList.contains('category-edit-btn')) {
+    const item = movimientoRecords.get(id);
+    if (item) openCategoryModal(item);
+  } else if (button.classList.contains('edit-btn')) {
+    try {
+      const row = await fetchJson(`/api/movimientos/${id}`);
+      openEditModal(row);
+    } catch (error) {
+      alert(error.message);
+    }
+  } else if (button.classList.contains('clone-btn')) {
+    try {
+      await fetchJson(`/api/movimientos/${id}/clone`, { method: 'POST' });
+      await loadMovimientos();
+      await loadSummary();
+    } catch (error) {
+      alert(error.message);
+    }
+  } else if (button.classList.contains('delete-btn')) {
+    pendingDeleteId = id;
+    deleteConfirmText.textContent = `¿Seguro que quieres borrar el movimiento ${pendingDeleteId}?`;
+    deleteConfirmModal.classList.remove('hidden');
+    deleteConfirmModal.setAttribute('aria-hidden', 'false');
+  }
+});
 
 async function loadOptions() {
   const data = await fetchJson('/api/options');
@@ -1086,7 +1131,8 @@ function renderBankButtons(fuentes) {
     return;
   }
 
-  const allBanksSelected = selectedBanks === null || selectedBanks.length === fuentes.length;
+  const allBanksSelected = selectedBanks === null
+    || fuentes.every((bank) => selectedBanks.includes(bank));
   dashboardBankButtons.innerHTML = `
     <button type="button" class="bank-toggle all-banks-toggle ${allBanksSelected ? 'active' : ''}" aria-pressed="${allBanksSelected}">
       Todos los bancos
@@ -1107,7 +1153,7 @@ function renderBankButtons(fuentes) {
     .join('');
 
   dashboardBankButtons.querySelector('.all-banks-toggle').addEventListener('click', () => {
-    selectedBanks = null;
+    selectedBanks = allBanksSelected ? [] : null;
     renderBankButtons(fuentes);
     loadDashboard();
     if (activeViewName === 'balances') loadBalanceHistoryChart();
@@ -1161,6 +1207,12 @@ function syncDashboardDateInputs() {
   updateRangeSliderVisual();
 }
 
+let dashboardRangeLoadTimeout;
+function scheduleDashboardLoad() {
+  window.clearTimeout(dashboardRangeLoadTimeout);
+  dashboardRangeLoadTimeout = window.setTimeout(() => loadDashboard(), 150);
+}
+
 dateStartSlider.addEventListener('input', () => {
   activeRangePreset = null;
   setRangeShortcutState();
@@ -1168,7 +1220,7 @@ dateStartSlider.addEventListener('input', () => {
     dateEndSlider.value = dateStartSlider.value;
   }
   syncDashboardDateInputs();
-  loadDashboard();
+  scheduleDashboardLoad();
 });
 
 dateEndSlider.addEventListener('input', () => {
@@ -1178,7 +1230,7 @@ dateEndSlider.addEventListener('input', () => {
     dateStartSlider.value = dateEndSlider.value;
   }
   syncDashboardDateInputs();
-  loadDashboard();
+  scheduleDashboardLoad();
 });
 
 document.querySelectorAll('.range-shortcut:not(#clearDashboardDateFilter)').forEach((button) => {
@@ -1222,37 +1274,59 @@ function buildDashboardFilterParams() {
   return params;
 }
 
-async function loadDashboard(requestedMovementsPage = null) {
+async function loadDashboard() {
+  const requestId = ++dashboardRequestId;
   const params = buildDashboardFilterParams();
-  const filterKey = params.toString();
-  if (dashboardFilterKey !== filterKey) {
-    dashboardFilterKey = filterKey;
-    dashboardMovementsPage = 1;
-  }
-  if (requestedMovementsPage !== null) {
-    dashboardMovementsPage = requestedMovementsPage;
-  }
-
   const dashboardData = await fetchJson(`/api/dashboard?${params.toString()}`);
+  if (requestId !== dashboardRequestId) return;
   renderDashboard(dashboardData);
-  params.set('page', String(dashboardMovementsPage));
-  try {
-    const movementsData = await fetchJson(`/api/dashboard/movimientos?${params.toString()}`);
-    dashboardMovementsPage = movementsData.page;
-    renderDashboardMovements(movementsData);
-  } catch (error) {
-    dashboardMovementsSummary.textContent = error.message;
-    dashboardMovementsRows.innerHTML = '<tr><td colspan="6" class="empty">No se pudieron cargar los movimientos.</td></tr>';
-  }
+  await loadDashboardMovements(true, params);
 }
 
-dashboardMovementsPrevious.addEventListener('click', () => {
-  if (dashboardMovementsPage > 1) loadDashboard(dashboardMovementsPage - 1);
-});
+async function loadDashboardMovements(reset = false, filters = null) {
+  if (reset) {
+    dashboardMovementsRequestId += 1;
+    dashboardMovementsPage = 0;
+    dashboardMovementsTotal = 0;
+    dashboardMovementsLoading = false;
+    dashboardMovementsRows.replaceChildren();
+    dashboardMovementsParams = new URLSearchParams(filters || buildDashboardFilterParams());
+  }
+  if (
+    dashboardMovementsLoading
+    || (dashboardMovementsPage > 0
+      && dashboardMovementsPage * dashboardMovementsPageSize >= dashboardMovementsTotal)
+  ) return;
 
-dashboardMovementsNext.addEventListener('click', () => {
-  loadDashboard(dashboardMovementsPage + 1);
-});
+  const requestId = dashboardMovementsRequestId;
+  const nextPage = dashboardMovementsPage + 1;
+  const params = new URLSearchParams(dashboardMovementsParams);
+  params.set('page', String(nextPage));
+  params.set('limit', String(dashboardMovementsPageSize));
+  dashboardMovementsLoading = true;
+  try {
+    const data = await fetchJson(`/api/dashboard/movimientos?${params.toString()}`);
+    if (requestId !== dashboardMovementsRequestId) return;
+    dashboardMovementsPage = data.page;
+    dashboardMovementsTotal = data.total;
+    renderDashboardMovements(data, nextPage > 1);
+  } catch (error) {
+    if (requestId === dashboardMovementsRequestId) {
+      dashboardMovementsSummary.textContent = error.message;
+      if (!dashboardMovementsPage) {
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 6;
+        cell.className = 'empty';
+        cell.textContent = 'No se pudieron cargar los movimientos.';
+        row.appendChild(cell);
+        dashboardMovementsRows.replaceChildren(row);
+      }
+    }
+  } finally {
+    if (requestId === dashboardMovementsRequestId) dashboardMovementsLoading = false;
+  }
+}
 
 async function loadBalanceHistoryChart() {
   const balanceParams = new URLSearchParams();
@@ -1272,22 +1346,72 @@ async function loadBalanceHistoryChart() {
 
 balanceMonthSelect.addEventListener('change', loadBalanceHistoryChart);
 
-async function loadMovimientos() {
+async function loadMovimientos(reset = true) {
+  if (reset) {
+    movimientosRequestId += 1;
+    movimientosPage = 0;
+    movimientosLoading = false;
+    tableBody.replaceChildren();
+    movimientoRecords.clear();
+  }
+  if (
+    movimientosLoading
+    || (movimientosPage > 0 && movimientosPage * movimientosPageSize >= state.total)
+  ) return;
+
+  const requestId = movimientosRequestId;
+  const nextPage = movimientosPage + 1;
   const params = new URLSearchParams({
-    page: String(state.page),
-    limit: String(state.limit),
     q: state.q,
     fuente: state.fuente,
     categoria: state.categoria,
+    page: String(nextPage),
+    limit: String(movimientosPageSize),
   });
   if (state.dateStart) params.set('date_start', state.dateStart);
   if (state.dateEnd) params.set('date_end', state.dateEnd);
 
-  const data = await fetchJson(`/api/movimientos?${params.toString()}`);
-  state.total = data.total;
-  renderMovimientos(data.items);
-  updatePagination();
+  movimientosLoading = true;
+  try {
+    const data = await fetchJson(`/api/movimientos?${params.toString()}`);
+    if (requestId !== movimientosRequestId) return;
+    state.total = data.total;
+    movimientosPage = data.page;
+    renderMovimientos(data.items, nextPage > 1);
+    movimientosCountEl.textContent = state.total === 1
+      ? '1 registro'
+      : `${state.total} registros`;
+  } catch (error) {
+    if (requestId === movimientosRequestId) {
+      movimientosCountEl.textContent = error.message;
+      if (!movimientosPage) {
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 10;
+        cell.className = 'empty';
+        cell.textContent = error.message;
+        row.appendChild(cell);
+        tableBody.replaceChildren(row);
+      }
+    }
+  } finally {
+    if (requestId === movimientosRequestId) movimientosLoading = false;
+  }
 }
+
+movimientosTableWrap.addEventListener('scroll', () => {
+  if (movimientosTableWrap.scrollHeight - movimientosTableWrap.scrollTop
+    <= movimientosTableWrap.clientHeight + 150) {
+    loadMovimientos(false);
+  }
+});
+
+dashboardMovementsWrap.addEventListener('scroll', () => {
+  if (dashboardMovementsWrap.scrollHeight - dashboardMovementsWrap.scrollTop
+    <= dashboardMovementsWrap.clientHeight + 150) {
+    loadDashboardMovements();
+  }
+});
 
 async function loadSummary() {
   const data = await fetchJson('/api/summary');
@@ -1425,14 +1549,22 @@ function addBudgetMoneyCell(row, value, difference = false) {
 }
 
 function renderBudgetReport(data) {
-  budgetSummary.textContent = `Presupuesto: ${formatMoneyFromCents(data.budget_total_cent)} · Real: ${formatMoneyFromCents(data.actual_total_cent)} · Diferencia: ${formatBudgetDifference(data.difference_total_cent)}`;
+  const monthLabel = formatMonthValue(data.month);
+  budgetBudgetHeader.textContent = `Presupuesto · ${monthLabel}`;
+  budgetActualHeader.textContent = `Real · ${monthLabel}`;
   budgetRows.replaceChildren();
 
-  data.groups.forEach((group) => {
+  data.groups.forEach((group, groupIndex) => {
     const groupRow = document.createElement('tr');
     groupRow.className = 'budget-group-row';
     const groupName = document.createElement('td');
-    groupName.textContent = group.categoria1;
+    const toggle = document.createElement('button');
+    toggle.className = 'budget-group-toggle';
+    toggle.type = 'button';
+    toggle.dataset.groupIndex = String(groupIndex);
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.textContent = group.categoria1;
+    groupName.appendChild(toggle);
     groupRow.appendChild(groupName);
     groupRow.appendChild(document.createElement('td'));
     addBudgetMoneyCell(groupRow, group.budget_cent);
@@ -1440,17 +1572,38 @@ function renderBudgetReport(data) {
     addBudgetMoneyCell(groupRow, group.difference_cent, true);
     budgetRows.appendChild(groupRow);
 
-    group.children.forEach((category) => {
+    group.children.forEach((category, categoryIndex) => {
       const row = document.createElement('tr');
       row.className = 'budget-detail-row';
+      row.dataset.groupIndex = String(groupIndex);
+      row.dataset.categoryIndex = String(categoryIndex);
+      row.hidden = true;
       row.appendChild(document.createElement('td'));
       const categoryName = document.createElement('td');
-      categoryName.textContent = category.categoria2;
+      const toggleCategory = document.createElement('button');
+      toggleCategory.className = 'budget-category-toggle';
+      toggleCategory.type = 'button';
+      toggleCategory.dataset.groupIndex = String(groupIndex);
+      toggleCategory.dataset.categoryIndex = String(categoryIndex);
+      toggleCategory.dataset.category2 = category.categoria2;
+      toggleCategory.setAttribute('aria-expanded', 'false');
+      toggleCategory.textContent = category.categoria2;
+      categoryName.appendChild(toggleCategory);
       row.appendChild(categoryName);
       addBudgetMoneyCell(row, category.budget_cent);
       addBudgetMoneyCell(row, category.actual_cent);
       addBudgetMoneyCell(row, category.difference_cent, true);
       budgetRows.appendChild(row);
+
+      const movementsRow = document.createElement('tr');
+      movementsRow.className = 'budget-transactions-row';
+      movementsRow.dataset.groupIndex = String(groupIndex);
+      movementsRow.dataset.categoryIndex = String(categoryIndex);
+      movementsRow.hidden = true;
+      const movementsCell = document.createElement('td');
+      movementsCell.colSpan = 5;
+      movementsRow.appendChild(movementsCell);
+      budgetRows.appendChild(movementsRow);
     });
   });
 
@@ -1466,8 +1619,113 @@ function renderBudgetReport(data) {
   budgetTotals.appendChild(totalRow);
 }
 
+function renderBudgetMovementDetails(cell, items) {
+  if (!items.length) {
+    cell.textContent = 'No hay movimientos para esta categoría en el mes seleccionado.';
+    return;
+  }
+
+  const table = document.createElement('table');
+  table.className = 'budget-transactions-table';
+  const head = document.createElement('thead');
+  const headerRow = document.createElement('tr');
+  ['Fecha', 'Fuente', 'Concepto', 'Movimiento', 'Importe'].forEach((label) => {
+    const header = document.createElement('th');
+    header.textContent = label;
+    headerRow.appendChild(header);
+  });
+  head.appendChild(headerRow);
+  table.appendChild(head);
+
+  const body = document.createElement('tbody');
+  items.forEach((item) => {
+    const row = document.createElement('tr');
+    [
+      formatShortDate(item.f_valor || item.fecha),
+      item.fuente || '—',
+      item.concepto || '—',
+      item.movimiento || '—',
+    ].forEach((value) => {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      row.appendChild(cell);
+    });
+    const amount = document.createElement('td');
+    amount.className = 'money-cell';
+    amount.textContent = formatMoneyFromCents(-item.importe_cent);
+    row.appendChild(amount);
+    body.appendChild(row);
+  });
+  table.appendChild(body);
+  cell.replaceChildren(table);
+}
+
+async function toggleBudgetCategoryMovements(toggle) {
+  const groupIndex = toggle.dataset.groupIndex;
+  const categoryIndex = toggle.dataset.categoryIndex;
+  const key = `${budgetMonth.value}\u0000${toggle.dataset.category2}`;
+  const movementsRow = budgetRows.querySelector(
+    `.budget-transactions-row[data-group-index="${groupIndex}"][data-category-index="${categoryIndex}"]`,
+  );
+  if (!movementsRow) return;
+
+  const expanded = toggle.getAttribute('aria-expanded') === 'true';
+  toggle.setAttribute('aria-expanded', String(!expanded));
+  movementsRow.hidden = expanded;
+  if (expanded) return;
+
+  const cell = movementsRow.cells[0];
+  if (budgetMovementCache.has(key)) {
+    renderBudgetMovementDetails(cell, budgetMovementCache.get(key));
+    return;
+  }
+
+  cell.textContent = 'Cargando movimientos…';
+  try {
+    const params = new URLSearchParams({
+      month: budgetMonth.value,
+      categoria2: toggle.dataset.category2,
+    });
+    const data = await fetchJson(`/api/presupuestos/movimientos?${params.toString()}`);
+    if (!budgetRows.contains(movementsRow) || budgetMonth.value !== data.month) return;
+    budgetMovementCache.set(key, data.items);
+    renderBudgetMovementDetails(cell, data.items);
+  } catch (error) {
+    if (budgetRows.contains(movementsRow)) cell.textContent = error.message;
+  }
+}
+
+budgetRows.addEventListener('click', async (event) => {
+  const categoryRow = event.target.closest('.budget-detail-row');
+  const categoryToggle = categoryRow?.querySelector('.budget-category-toggle');
+  if (categoryToggle) {
+    await toggleBudgetCategoryMovements(categoryToggle);
+    return;
+  }
+
+  const groupRow = event.target.closest('.budget-group-row');
+  const groupToggle = groupRow?.querySelector('.budget-group-toggle');
+  if (!groupToggle) return;
+
+  const expanded = groupToggle.getAttribute('aria-expanded') === 'true';
+  groupToggle.setAttribute('aria-expanded', String(!expanded));
+  budgetRows.querySelectorAll('.budget-detail-row, .budget-transactions-row').forEach((row) => {
+    if (row.dataset.groupIndex === groupToggle.dataset.groupIndex) {
+      row.hidden = expanded;
+    }
+  });
+  if (expanded) {
+    budgetRows.querySelectorAll('.budget-category-toggle').forEach((toggle) => {
+      if (toggle.dataset.groupIndex === groupToggle.dataset.groupIndex) {
+        toggle.setAttribute('aria-expanded', 'false');
+      }
+    });
+  }
+});
+
 async function loadBudgets() {
   const month = budgetMonth.value || new Date().toISOString().slice(0, 7);
+  budgetMonth.value = month;
   const data = await fetchJson(`/api/presupuestos?month=${encodeURIComponent(month)}`);
   renderBudgetReport(data);
 }
@@ -1922,31 +2180,26 @@ refreshDataBtn.addEventListener('click', refreshDatabaseData);
 
 searchInput.addEventListener('input', (event) => {
   state.q = event.target.value.trim();
-  state.page = 1;
   loadMovimientos();
 });
 
 fuenteFilter.addEventListener('change', (event) => {
   state.fuente = event.target.value;
-  state.page = 1;
   loadMovimientos();
 });
 
 categoriaFilter.addEventListener('change', (event) => {
   state.categoria = event.target.value;
-  state.page = 1;
   loadMovimientos();
 });
 
 dateStartFilter.addEventListener('change', (event) => {
   state.dateStart = event.target.value;
-  state.page = 1;
   loadMovimientos();
 });
 
 dateEndFilter.addEventListener('change', (event) => {
   state.dateEnd = event.target.value;
-  state.page = 1;
   loadMovimientos();
 });
 
@@ -2035,28 +2288,12 @@ document.getElementById('resetFilters').addEventListener('click', () => {
   state.categoria = '';
   state.dateStart = '';
   state.dateEnd = '';
-  state.page = 1;
   searchInput.value = '';
   fuenteFilter.value = '';
   categoriaFilter.value = '';
   dateStartFilter.value = '';
   dateEndFilter.value = '';
   loadMovimientos();
-});
-
-prevPageBtn.addEventListener('click', () => {
-  if (state.page > 1) {
-    state.page -= 1;
-    loadMovimientos();
-  }
-});
-
-nextPageBtn.addEventListener('click', () => {
-  const pages = Math.max(1, Math.ceil(state.total / state.limit));
-  if (state.page < pages) {
-    state.page += 1;
-    loadMovimientos();
-  }
 });
 
 exportExcelBtn.addEventListener('click', () => {
@@ -2284,7 +2521,5 @@ editForm.addEventListener('submit', async (event) => {
   populateEditCategoryOptions();
   await loadOptions();
   await loadSummary();
-  await loadMovimientos();
-  await loadDashboard();
   setActiveView('dashboard');
 })();

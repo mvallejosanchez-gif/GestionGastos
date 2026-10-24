@@ -6,11 +6,12 @@ Aplicación web local para consultar y gestionar movimientos financieros almacen
 
 - **Resumen:** consulta de gastos por fuente y por niveles de categoría, con filtros por fecha.
 - **Saldos:** visualización del histórico de saldos y ajuste del periodo histórico y de los parámetros de cada cuenta.
-- **Movimientos:** listado paginado con búsqueda y filtros por fuente, categoría y fechas. Permite crear, editar, duplicar y eliminar movimientos, cambiar categorías y exportar los resultados a Excel.
+- **Movimientos:** listado con scroll y cabecera fija, búsqueda y filtros por fuente, categoría y fechas. Permite crear, editar, duplicar y eliminar movimientos, cambiar categorías y exportar los resultados a Excel.
 - **Evolución ahorro:** pestaña integrada en la aplicación para consultar la gráfica de ahorro total, ahorro hipotético y extrapolación; permite añadir y editar registros de la tabla `ahorro` desde un modal.
 - **Importación:** previsualización de movimientos nuevos encontrados en `input/`, selección de registros e importación a la base de datos. Se omiten duplicados ya importados.
 - **Presupuestos:** consulta de presupuestos mensuales por categoría.
 - **Configuración:** ajustes de cuentas, del histórico de saldos y del horizonte de extrapolación del ahorro.
+- **Tablas:** cabeceras fijas y scroll interno en las tablas de todas las pestañas, sin controles de paginación. Los movimientos se cargan por bloques al desplazarse para agilizar la apertura y los filtros.
 
 ## Extrapolación del ahorro
 

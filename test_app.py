@@ -33,6 +33,89 @@ class GastosAppTests(unittest.TestCase):
         self.assertIn('total', payload)
         self.assertGreaterEqual(len(payload['items']), 1)
 
+    def test_budget_category_movements_are_limited_to_selected_month_and_expenses(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'gastos.db'
+            conn = sqlite3.connect(db_path)
+            schema_sql = Path(__file__).resolve().parent / 'schema.sql'
+            conn.executescript(schema_sql.read_text(encoding='utf-8'))
+            conn.execute(
+                "INSERT INTO categorias (categoria2, categoria1, categoria0) VALUES (?, ?, 'Gasto')",
+                ('Supermercado', 'Alimentación'),
+            )
+            conn.execute(
+                "INSERT INTO categorias (categoria2, categoria1, categoria0) VALUES (?, ?, 'Ingreso')",
+                ('Ingreso', 'Ingresos'),
+            )
+            conn.executemany(
+                '''
+                INSERT INTO movimientos (
+                    fuente, f_valor, fecha, concepto, movimiento, importe_cent,
+                    divisa, categoria2, clave
+                ) VALUES (?, ?, ?, ?, ?, ?, 'EUR', ?, ?)
+                ''',
+                [
+                    ('BBVA', '2026-10-10', '2026-10-10', 'Compra octubre', 'Tarjeta', -2500, 'Supermercado', 'budget-oct'),
+                    ('BBVA', '2026-09-10', '2026-09-10', 'Compra septiembre', 'Tarjeta', -1000, 'Supermercado', 'budget-sep'),
+                    ('BBVA', '2026-10-11', '2026-10-11', 'Ingreso octubre', 'Transferencia', 5000, 'Ingreso', 'budget-income'),
+                ],
+            )
+            conn.commit()
+            conn.close()
+
+            with patch('AppGastos.DB_PATH', db_path):
+                response = self.client.get(
+                    '/api/presupuestos/movimientos?month=2026-10&categoria2=Supermercado'
+                )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertEqual(payload['month'], '2026-10')
+            self.assertEqual(payload['categoria2'], 'Supermercado')
+            self.assertEqual([item['concepto'] for item in payload['items']], ['Compra octubre'])
+
+    def test_movimientos_can_return_all_filtered_rows_without_pagination(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'gastos.db'
+            conn = sqlite3.connect(db_path)
+            schema_sql = Path(__file__).resolve().parent / 'schema.sql'
+            conn.executescript(schema_sql.read_text(encoding='utf-8'))
+            conn.execute(
+                'INSERT INTO cuentas (fuente, contabilidad2) VALUES (?, ?)',
+                ('BBVA', 'BANCO'),
+            )
+            conn.executemany(
+                '''
+                INSERT INTO movimientos (
+                    fuente, f_valor, fecha, concepto, movimiento, importe_cent,
+                    divisa, categoria2, clave
+                ) VALUES (?, ?, ?, ?, ?, ?, 'EUR', 'PENDIENTE', ?)
+                ''',
+                [
+                    (
+                        'BBVA', '2026-10-10', '2026-10-10', f'Movimiento {index}',
+                        'Pago', -100, f'movement-all-{index}',
+                    )
+                    for index in range(55)
+                ],
+            )
+            conn.commit()
+            conn.close()
+
+            with patch('AppGastos.DB_PATH', db_path):
+                paged_response = self.client.get('/api/movimientos?limit=50')
+                chunk_response = self.client.get('/api/movimientos?page=2&limit=20')
+                all_response = self.client.get('/api/movimientos?all=1')
+
+            self.assertEqual(paged_response.status_code, 200)
+            self.assertEqual(len(paged_response.get_json()['items']), 50)
+            self.assertEqual(chunk_response.status_code, 200)
+            self.assertEqual(chunk_response.get_json()['page'], 2)
+            self.assertEqual(len(chunk_response.get_json()['items']), 20)
+            self.assertEqual(all_response.status_code, 200)
+            self.assertEqual(all_response.get_json()['total'], 55)
+            self.assertEqual(len(all_response.get_json()['items']), 55)
+
     def test_update_movimiento(self):
         conn = sqlite3.connect(DB_PATH)
         row = conn.execute(
@@ -273,6 +356,55 @@ class GastosAppTests(unittest.TestCase):
             self.assertEqual(payload['total'], 1)
             self.assertEqual(payload['items'][0]['concepto'], 'Compra de comida')
             self.assertEqual(payload['items'][0]['categoria2'], 'Supermercado')
+
+    def test_dashboard_movements_can_return_all_filtered_rows_without_pagination(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'gastos.db'
+            conn = sqlite3.connect(db_path)
+            schema_sql = Path(__file__).resolve().parent / 'schema.sql'
+            conn.executescript(schema_sql.read_text(encoding='utf-8'))
+            conn.execute(
+                'INSERT INTO cuentas (fuente, contabilidad2) VALUES (?, ?)',
+                ('BBVA', 'BANCO'),
+            )
+            conn.executemany(
+                '''
+                INSERT INTO movimientos (
+                    fuente, f_valor, fecha, concepto, movimiento, importe_cent,
+                    divisa, categoria2, clave
+                ) VALUES (?, ?, ?, ?, ?, ?, 'EUR', 'PENDIENTE', ?)
+                ''',
+                [
+                    (
+                        'BBVA', '2026-10-10', '2026-10-10', f'Movimiento {index}',
+                        'Pago', -100, f'all-{index}',
+                    )
+                    for index in range(55)
+                ],
+            )
+            conn.commit()
+            conn.close()
+
+            with patch('AppGastos.DB_PATH', db_path):
+                paged_response = self.client.get(
+                    '/api/dashboard/movimientos?date_start=2026-10-01&date_end=2026-10-31'
+                )
+                chunk_response = self.client.get(
+                    '/api/dashboard/movimientos?date_start=2026-10-01&date_end=2026-10-31'
+                    '&page=2&limit=20'
+                )
+                all_response = self.client.get(
+                    '/api/dashboard/movimientos?date_start=2026-10-01&date_end=2026-10-31&all=1'
+                )
+
+            self.assertEqual(paged_response.status_code, 200)
+            self.assertEqual(len(paged_response.get_json()['items']), 50)
+            self.assertEqual(chunk_response.status_code, 200)
+            self.assertEqual(chunk_response.get_json()['page'], 2)
+            self.assertEqual(len(chunk_response.get_json()['items']), 20)
+            self.assertEqual(all_response.status_code, 200)
+            self.assertEqual(all_response.get_json()['total'], 55)
+            self.assertEqual(len(all_response.get_json()['items']), 55)
 
     def test_input_importer_avoids_duplicates(self):
         with tempfile.TemporaryDirectory() as tmpdir:

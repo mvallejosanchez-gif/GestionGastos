@@ -642,6 +642,39 @@ def api_presupuestos():
     })
 
 
+@app.get('/api/presupuestos/movimientos')
+def api_presupuestos_movimientos():
+    requested_month = request.args.get('month', '').strip()
+    category2 = request.args.get('categoria2', '').strip()
+    try:
+        month = datetime.strptime(requested_month, '%Y-%m').strftime('%Y-%m')
+    except ValueError:
+        return jsonify({'error': 'El mes debe tener el formato AAAA-MM.'}), 400
+    if not category2:
+        return jsonify({'error': 'La categoría es obligatoria.'}), 400
+
+    conn = get_db()
+    rows = conn.execute(
+        '''
+        SELECT m.id, m.f_valor, m.fecha, m.fuente, m.concepto, m.movimiento,
+               m.importe_cent
+        FROM movimientos m
+        JOIN categorias c ON c.categoria2 = m.categoria2
+        WHERE c.categoria0 = 'Gasto'
+          AND m.categoria2 = ?
+          AND strftime('%Y-%m', date(COALESCE(m.f_valor, m.fecha))) = ?
+        ORDER BY datetime(COALESCE(m.f_valor, m.fecha)) DESC, m.id DESC
+        ''',
+        (category2, month),
+    ).fetchall()
+    conn.close()
+    return jsonify({
+        'month': month,
+        'categoria2': category2,
+        'items': [dict(row) for row in rows],
+    })
+
+
 @app.get('/api/dashboard')
 def api_dashboard():
     raw_fuentes = request.args.getlist('fuentes')
@@ -842,8 +875,9 @@ def api_dashboard_movimientos():
         fuentes_seleccionadas, sin_fuentes, date_start, date_end, selected_categories
     )
 
+    include_all = request.args.get('all') == '1'
     page = max(1, int(request.args.get('page', 1)))
-    limit = 50
+    limit = max(1, min(200, int(request.args.get('limit', 50))))
     total = conn.execute(
         f'''
         SELECT COUNT(*)
@@ -855,18 +889,21 @@ def api_dashboard_movimientos():
     ).fetchone()[0]
     pages = max(1, (total + limit - 1) // limit)
     page = min(page, pages)
-    rows = conn.execute(
-        f'''
+    rows_sql = f'''
         SELECT m.f_valor, m.fecha, m.fuente, m.concepto, m.movimiento,
                m.importe_cent, c.categoria2
         FROM movimientos m
         LEFT JOIN categorias c ON c.categoria2 = m.categoria2
         {sql_where}
         ORDER BY datetime(COALESCE(m.f_valor, m.fecha)) DESC, m.id DESC
-        LIMIT ? OFFSET ?
-        ''',
-        params + [limit, (page - 1) * limit],
-    ).fetchall()
+        '''
+    if include_all:
+        rows = conn.execute(rows_sql, params).fetchall()
+    else:
+        rows = conn.execute(
+            rows_sql + ' LIMIT ? OFFSET ?',
+            params + [limit, (page - 1) * limit],
+        ).fetchall()
     conn.close()
     return jsonify({
         'items': [dict(row) for row in rows],
@@ -1311,6 +1348,7 @@ def build_movimientos_query_params():
 
 @app.get('/api/movimientos')
 def api_movimientos():
+    include_all = request.args.get('all') == '1'
     page = max(1, int(request.args.get('page', 1)))
     limit = max(1, min(200, int(request.args.get('limit', 50))))
     sql_where, params = build_movimientos_query_params()
@@ -1321,8 +1359,7 @@ def api_movimientos():
         params,
     ).fetchone()['total']
 
-    rows = conn.execute(
-        f'''
+    rows_sql = f'''
         SELECT id, fuente, f_valor, fecha, concepto, movimiento, importe_cent,
                divisa, disponible_cent, divisa2, observaciones, categoria2,
                comentarios, comentarios2, key_legacy, clave,
@@ -1333,10 +1370,14 @@ def api_movimientos():
                END AS disponible_calculado_cent
         FROM movimientos{sql_where}
         ORDER BY f_valor DESC, id DESC
-        LIMIT ? OFFSET ?
-        ''',
-        params + [limit, (page - 1) * limit],
-    ).fetchall()
+        '''
+    if include_all:
+        rows = conn.execute(rows_sql, params).fetchall()
+    else:
+        rows = conn.execute(
+            rows_sql + ' LIMIT ? OFFSET ?',
+            params + [limit, (page - 1) * limit],
+        ).fetchall()
     conn.close()
 
     return jsonify({

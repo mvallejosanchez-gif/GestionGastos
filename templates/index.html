@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Gestión de gastos</title>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20261018-05" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20261024-06" />
   </head>
   <body>
     <div class="container">
@@ -87,7 +87,7 @@
               <button id="exportExcel" class="primary" type="button">Descargar Excel</button>
             </div>
           </div>
-          <div class="table-wrap">
+          <div class="table-wrap movimientos-table-wrap">
             <table>
               <thead>
                 <tr>
@@ -105,12 +105,6 @@
               </thead>
               <tbody id="movimientosBody"></tbody>
             </table>
-          </div>
-
-          <div class="pagination">
-            <button id="prevPage" type="button">Anterior</button>
-            <span id="pageInfo">Página 1</span>
-            <button id="nextPage" type="button">Siguiente</button>
           </div>
         </section>
       </section>
@@ -160,10 +154,12 @@
                 <div id="dashboardChart0" class="donut-chart" aria-label="Gráfico por categoría 0"></div>
                 <div id="dashboardChartLegend0" class="chart-legend"></div>
               </div>
-              <table>
-                <thead><tr><th>Categoría</th><th class="text-right">Total</th></tr></thead>
-                <tbody id="dashboardBody0"></tbody>
-              </table>
+              <div class="dashboard-category-table-wrap">
+                <table>
+                  <thead><tr><th>Categoría</th><th class="text-right">Total</th></tr></thead>
+                  <tbody id="dashboardBody0"></tbody>
+                </table>
+              </div>
             </section>
 
             <section class="dashboard-box dashboard-category-box">
@@ -172,10 +168,12 @@
                 <div id="dashboardChart1" class="donut-chart" aria-label="Gráfico por categoría 1"></div>
                 <div id="dashboardChartLegend1" class="chart-legend"></div>
               </div>
-              <table>
-                <thead><tr><th>Categoría</th><th class="text-right">Total</th></tr></thead>
-                <tbody id="dashboardBody1"></tbody>
-              </table>
+              <div class="dashboard-category-table-wrap">
+                <table>
+                  <thead><tr><th>Categoría</th><th class="text-right">Total</th></tr></thead>
+                  <tbody id="dashboardBody1"></tbody>
+                </table>
+              </div>
             </section>
 
             <section class="dashboard-box dashboard-category-box">
@@ -184,10 +182,12 @@
                 <div id="dashboardChart2" class="donut-chart" aria-label="Gráfico por categoría 2"></div>
                 <div id="dashboardChartLegend2" class="chart-legend"></div>
               </div>
-              <table>
-                <thead><tr><th>Categoría</th><th class="text-right">Total</th></tr></thead>
-                <tbody id="dashboardBody2"></tbody>
-              </table>
+              <div class="dashboard-category-table-wrap">
+                <table>
+                  <thead><tr><th>Categoría</th><th class="text-right">Total</th></tr></thead>
+                  <tbody id="dashboardBody2"></tbody>
+                </table>
+              </div>
             </section>
           </div>
 
@@ -196,7 +196,7 @@
               <h2>Movimientos del periodo</h2>
               <span id="dashboardMovementsSummary" class="muted">Cargando movimientos…</span>
             </div>
-            <div class="table-wrap">
+            <div class="table-wrap dashboard-movements-table-wrap">
               <table class="dashboard-movements-table">
                 <thead>
                   <tr>
@@ -212,11 +212,6 @@
                   <tr><td colspan="6" class="empty">Cargando movimientos…</td></tr>
                 </tbody>
               </table>
-            </div>
-            <div class="pagination dashboard-movements-pagination">
-              <button id="dashboardMovementsPrevious" class="secondary" type="button" disabled>Anterior</button>
-              <span id="dashboardMovementsPage" class="muted">Página 1 de 1</span>
-              <button id="dashboardMovementsNext" class="secondary" type="button" disabled>Siguiente</button>
             </div>
           </section>
         </div>
@@ -393,15 +388,14 @@
               <input id="budgetMonth" type="month" />
             </label>
           </div>
-          <div id="budgetSummary" class="budget-summary"></div>
           <div class="table-wrap">
             <table class="budget-table">
               <thead>
                 <tr>
                   <th>Categoría 1</th>
                   <th>Categoría 2</th>
-                  <th class="text-right">Presupuesto mes</th>
-                  <th class="text-right">Real mes</th>
+                  <th id="budgetBudgetHeader" class="text-right">Presupuesto</th>
+                  <th id="budgetActualHeader" class="text-right">Real</th>
                   <th class="text-right">Diferencia</th>
                 </tr>
               </thead>
@@ -601,6 +595,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="{{ url_for('static', filename='app.js') }}?v=20261018-06"></script>
+    <script src="{{ url_for('static', filename='app.js') }}?v=20261024-06"></script>
   </body>
 </html>
