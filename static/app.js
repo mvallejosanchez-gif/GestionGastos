@@ -1107,7 +1107,7 @@ function renderBankButtons(fuentes) {
     .join('');
 
   dashboardBankButtons.querySelector('.all-banks-toggle').addEventListener('click', () => {
-    selectedBanks = allBanksSelected ? [] : null;
+    selectedBanks = null;
     renderBankButtons(fuentes);
     loadDashboard();
     if (activeViewName === 'balances') loadBalanceHistoryChart();
@@ -1488,6 +1488,7 @@ const savingsAmountFields = [
   'Gasto Extra2',
   'Aportaciones Abuela',
 ];
+const savingsBalanceFields = savingsAmountFields.slice(0, 11);
 const savingsFields = [
   'Mes',
   ...savingsAmountFields,
@@ -1742,11 +1743,22 @@ function openSavingsModal(record = null) {
   savingsForm.reset();
   savingsForm.elements.namedItem('rowid').value = record?.rowid ?? '';
   savingsModalTitle.textContent = record ? 'Editar registro de ahorro' : 'Añadir registro de ahorro';
+  const previousRecord = savingsRecords[savingsRecords.length - 1];
+  const today = new Date();
+  const todayValue = [
+    today.getFullYear(),
+    String(today.getMonth() + 1).padStart(2, '0'),
+    String(today.getDate()).padStart(2, '0'),
+  ].join('-');
   savingsFields.forEach((field) => {
     const input = savingsForm.elements.namedItem(field);
-    const value = record?.[field];
+    const value = record
+      ? record[field]
+      : savingsBalanceFields.includes(field)
+        ? previousRecord?.[field]
+        : null;
     if (field === 'Mes') {
-      input.value = savingsDateForInput(value);
+      input.value = record ? savingsDateForInput(value) : todayValue;
     } else if (savingsAmountFields.includes(field)) {
       input.value = parseSavingsAmount(value) ?? '';
     } else {

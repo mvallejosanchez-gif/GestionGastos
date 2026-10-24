@@ -25,7 +25,7 @@ La ventana **N** se define en **Configuración → Extrapolación del ahorro** c
 
 El horizonte de la gráfica se configura por separado en **Años de proyección**, se guarda como `anios_proyeccion_ahorro` y admite de 1 a 50 años (5 por defecto). Cada forecast se extiende hasta `12 × años` meses. Son proyecciones lineales: no incluyen rendimientos, inflación ni cambios futuros en aportaciones.
 
-Los registros se pueden añadir o editar desde **Evolución ahorro**. El formulario incluye las columnas de la tabla `ahorro`; el ahorro total y el hipotético se calculan y no se editan directamente.
+Los registros se pueden añadir o editar desde **Evolución ahorro**. Al añadir uno nuevo, el formulario propone la fecha actual y copia los saldos del último registro para que solo haya que cambiar los que varíen. El formulario incluye las columnas de la tabla `ahorro`; el ahorro total y el hipotético se calculan y no se editan directamente.
 
 ## Requisitos
 
