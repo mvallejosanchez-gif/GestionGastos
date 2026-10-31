@@ -714,6 +714,165 @@ def api_options():
     return jsonify({'fuentes': fuentes, 'categorias': categorias})
 
 
+@app.get('/api/config/categorias')
+def api_config_categorias():
+    conn = get_db()
+    rows = conn.execute(
+        '''
+        SELECT categoria2, categoria1, categoria0
+        FROM categorias
+        ORDER BY categoria0 COLLATE NOCASE, categoria1 COLLATE NOCASE,
+                 categoria2 COLLATE NOCASE
+        '''
+    ).fetchall()
+    conn.close()
+    return jsonify({'categorias': [dict(row) for row in rows]})
+
+
+@app.post('/api/config/categorias')
+def api_create_config_categoria():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'El cuerpo de la solicitud no es válido'}), 400
+    category2 = str(payload.get('categoria2') or '').strip()
+    category1 = str(payload.get('categoria1') or '').strip()
+    category0 = str(payload.get('categoria0') or '').strip()
+    if not category2 or not category1:
+        return jsonify({'error': 'Indica nombre y categoría superior'}), 400
+    if category0 not in {'Gasto', 'Ingreso', 'Interno', 'Ahorro', 'No computa', 'PENDIENTE'}:
+        return jsonify({'error': 'El tipo de categoría no es válido'}), 400
+
+    conn = get_db()
+    try:
+        conn.execute(
+            'INSERT INTO categorias (categoria2, categoria1, categoria0) VALUES (?, ?, ?)',
+            (category2, category1, category0),
+        )
+        conn.commit()
+        return jsonify({
+            'categoria2': category2,
+            'categoria1': category1,
+            'categoria0': category0,
+        }), 201
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return jsonify({'error': 'Ya existe una categoría con ese nombre'}), 409
+    finally:
+        conn.close()
+
+
+@app.put('/api/config/categorias/<path:categoria2>')
+def api_update_config_categoria(categoria2: str):
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'El cuerpo de la solicitud no es válido'}), 400
+    new_category2 = str(payload.get('categoria2') or '').strip()
+    category1 = str(payload.get('categoria1') or '').strip()
+    category0 = str(payload.get('categoria0') or '').strip()
+    if not new_category2 or not category1:
+        return jsonify({'error': 'Indica nombre y categoría superior'}), 400
+    if category0 not in {'Gasto', 'Ingreso', 'Interno', 'Ahorro', 'No computa', 'PENDIENTE'}:
+        return jsonify({'error': 'El tipo de categoría no es válido'}), 400
+
+    conn = get_db()
+    try:
+        ensure_budget_settings(conn)
+        existing = conn.execute(
+            'SELECT categoria2 FROM categorias WHERE categoria2 = ?',
+            (categoria2,),
+        ).fetchone()
+        if existing is None:
+            return jsonify({'error': 'Categoría no encontrada'}), 404
+        duplicate = conn.execute(
+            'SELECT 1 FROM categorias WHERE categoria2 = ? AND categoria2 != ?',
+            (new_category2, categoria2),
+        ).fetchone()
+        if duplicate is not None:
+            return jsonify({'error': 'Ya existe una categoría con ese nombre'}), 409
+
+        conn.execute('BEGIN')
+        conn.execute(
+            '''
+            UPDATE categorias SET categoria2 = ?, categoria1 = ?, categoria0 = ?
+            WHERE categoria2 = ?
+            ''',
+            (new_category2, category1, category0, categoria2),
+        )
+        if new_category2 != categoria2:
+            conn.execute(
+                'UPDATE movimientos SET categoria2 = ? WHERE categoria2 = ?',
+                (new_category2, categoria2),
+            )
+            conn.execute(
+                'UPDATE presupuestos_mensuales SET categoria2 = ? WHERE categoria2 = ?',
+                (new_category2, categoria2),
+            )
+            legacy_budget = conn.execute(
+                'SELECT valor FROM app_config WHERE clave = ?',
+                (f'presupuesto:{categoria2}',),
+            ).fetchone()
+            if legacy_budget is not None:
+                conn.execute(
+                    'INSERT INTO app_config (clave, valor) VALUES (?, ?) '
+                    'ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor',
+                    (f'presupuesto:{new_category2}', legacy_budget['valor']),
+                )
+                conn.execute(
+                    'DELETE FROM app_config WHERE clave = ?',
+                    (f'presupuesto:{categoria2}',),
+                )
+        conn.commit()
+        return jsonify({
+            'categoria2': new_category2,
+            'categoria1': category1,
+            'categoria0': category0,
+        })
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        return jsonify({'error': 'No se pudo guardar la categoría por un conflicto de nombre'}), 409
+    finally:
+        conn.close()
+
+
+@app.delete('/api/config/categorias/<path:categoria2>')
+def api_delete_config_categoria(categoria2: str):
+    conn = get_db()
+    try:
+        ensure_budget_settings(conn)
+        category = conn.execute(
+            'SELECT 1 FROM categorias WHERE categoria2 = ?',
+            (categoria2,),
+        ).fetchone()
+        if category is None:
+            return jsonify({'error': 'Categoría no encontrada'}), 404
+        has_movements = conn.execute(
+            'SELECT 1 FROM movimientos WHERE categoria2 = ? LIMIT 1',
+            (categoria2,),
+        ).fetchone()
+        has_budgets = conn.execute(
+            '''
+            SELECT 1 FROM presupuestos_mensuales
+            WHERE categoria2 = ? AND importe_cent IS NOT NULL
+            LIMIT 1
+            ''',
+            (categoria2,),
+        ).fetchone()
+        if has_movements or has_budgets:
+            return jsonify({
+                'error': 'No se puede eliminar una categoría con movimientos o presupuestos asociados'
+            }), 409
+
+        conn.execute('DELETE FROM categorias WHERE categoria2 = ?', (categoria2,))
+        conn.execute(
+            'DELETE FROM presupuestos_mensuales WHERE categoria2 = ?',
+            (categoria2,),
+        )
+        conn.commit()
+        return jsonify({'deleted': categoria2})
+    finally:
+        conn.close()
+
+
 @app.get('/api/config/cuentas')
 def api_config_cuentas():
     conn = get_db()
@@ -967,6 +1126,13 @@ def api_presupuestos():
     except ValueError:
         month = datetime.now().strftime('%Y-%m')
     year, month_number = map(int, month.split('-'))
+    raw_annual_year = request.args.get('annual_year', '').strip()
+    try:
+        annual_year = int(raw_annual_year) if raw_annual_year else year
+        if not 1900 <= annual_year <= 2100:
+            raise ValueError
+    except ValueError:
+        return jsonify({'error': 'El año del acumulado debe estar entre 1900 y 2100.'}), 400
 
     conn = get_db()
     ensure_budget_settings(conn, year)
@@ -998,9 +1164,9 @@ def api_presupuestos():
     conn.close()
 
     current_date = date.today()
-    if year < current_date.year:
+    if annual_year < current_date.year:
         completed_month = 12
-    elif year == current_date.year:
+    elif annual_year == current_date.year:
         completed_month = current_date.month - 1
     else:
         completed_month = 0
@@ -1047,7 +1213,7 @@ def api_presupuestos():
     annual_actual_total_cent = 0
     if completed_month:
         conn = get_db()
-        ensure_budget_settings(conn, year)
+        ensure_budget_settings(conn, annual_year)
         annual_rows = conn.execute(
             '''
             SELECT c.categoria1, c.categoria2,
@@ -1072,7 +1238,7 @@ def api_presupuestos():
             WHERE c.categoria0 = 'Gasto'
             ORDER BY c.categoria1 COLLATE NOCASE, c.categoria2 COLLATE NOCASE
             ''',
-            (str(year), completed_month, year, completed_month),
+            (str(annual_year), completed_month, annual_year, completed_month),
         ).fetchall()
         conn.close()
 
@@ -1118,7 +1284,7 @@ def api_presupuestos():
         'actual_total_cent': actual_total_cent,
         'difference_total_cent': budget_total_cent - actual_total_cent,
         'annual': {
-            'year': year,
+            'year': annual_year,
             'through_month': completed_month,
             'groups': list(annual_groups.values()),
             'budget_total_cent': annual_budget_total_cent,

@@ -102,6 +102,7 @@ class GastosAppTests(unittest.TestCase):
                     ('2026-01-15', '2026-01-15', 'Compra enero', -1000, 'annual-jan'),
                     ('2026-09-15', '2026-09-15', 'Compra septiembre', -2500, 'annual-sep'),
                     ('2026-10-15', '2026-10-15', 'Compra octubre', -5000, 'annual-oct'),
+                    ('2025-02-15', '2025-02-15', 'Compra año anterior', -700, 'annual-previous-year'),
                 ],
             )
             conn.executemany(
@@ -111,11 +112,20 @@ class GastosAppTests(unittest.TestCase):
                 ''',
                 [(1, 10000), (9, 12000)],
             )
+            conn.execute(
+                '''
+                INSERT INTO presupuestos_mensuales (anio, mes, categoria2, importe_cent)
+                VALUES (2025, 2, 'Gasto de prueba', 900)
+                '''
+            )
             conn.commit()
             conn.close()
 
             with patch('AppGastos.DB_PATH', db_path), patch('AppGastos.date', FixedDate):
                 response = self.client.get('/api/presupuestos?month=2026-10')
+                previous_year_response = self.client.get(
+                    '/api/presupuestos?month=2026-10&annual_year=2025'
+                )
 
             self.assertEqual(response.status_code, 200)
             payload = response.get_json()
@@ -130,6 +140,14 @@ class GastosAppTests(unittest.TestCase):
                 3500,
             )
             self.assertEqual(payload['actual_total_cent'], 5000)
+            self.assertEqual(previous_year_response.status_code, 200)
+            previous_payload = previous_year_response.get_json()
+            previous_annual = previous_payload['annual']
+            self.assertEqual(previous_annual['year'], 2025)
+            self.assertEqual(previous_annual['through_month'], 12)
+            self.assertEqual(previous_annual['budget_total_cent'], 900)
+            self.assertEqual(previous_annual['actual_total_cent'], 700)
+            self.assertEqual(previous_payload['actual_total_cent'], 5000)
 
     def test_budget_amounts_are_editable_and_empty_categories_are_hidden(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -244,6 +262,98 @@ class GastosAppTests(unittest.TestCase):
                 ['Supermercado'],
             )
             self.assertIsNone(cleared_report['groups'][0]['children'][0]['budget_cent'])
+
+    def test_category_configuration_preserves_references_and_restricts_deletion(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'gastos.db'
+            conn = sqlite3.connect(db_path)
+            schema_sql = Path(__file__).resolve().parent / 'schema.sql'
+            conn.executescript(schema_sql.read_text(encoding='utf-8'))
+            conn.execute(
+                "INSERT INTO categorias (categoria2, categoria1, categoria0) VALUES (?, ?, 'Gasto')",
+                ('Categoría antigua', 'Casa'),
+            )
+            conn.execute(
+                '''
+                INSERT INTO movimientos (
+                    fuente, f_valor, fecha, concepto, movimiento, importe_cent,
+                    divisa, categoria2, clave
+                ) VALUES ('BBVA', '2026-01-10', '2026-01-10', 'Movimiento prueba',
+                          'Tarjeta', -1000, 'EUR', 'Categoría antigua', 'category-reference')
+                '''
+            )
+            conn.execute(
+                '''
+                INSERT INTO presupuestos_mensuales (anio, mes, categoria2, importe_cent)
+                VALUES (2026, 1, 'Categoría antigua', 15000)
+                '''
+            )
+            conn.execute(
+                "INSERT INTO categorias (categoria2, categoria1, categoria0) VALUES (?, ?, 'Gasto')",
+                ('Categoría vacía', 'Otros'),
+            )
+            conn.commit()
+            conn.close()
+
+            with patch('AppGastos.DB_PATH', db_path):
+                create_response = self.client.post(
+                    '/api/config/categorias',
+                    json={
+                        'categoria2': 'Nueva categoría',
+                        'categoria1': 'Casa',
+                        'categoria0': 'Gasto',
+                    },
+                )
+                duplicate_response = self.client.post(
+                    '/api/config/categorias',
+                    json={
+                        'categoria2': 'Nueva categoría',
+                        'categoria1': 'Casa',
+                        'categoria0': 'Gasto',
+                    },
+                )
+                update_response = self.client.put(
+                    '/api/config/categorias/Categor%C3%ADa%20antigua',
+                    json={
+                        'categoria2': 'Categoría nueva nombre',
+                        'categoria1': 'Vivienda',
+                        'categoria0': 'Ingreso',
+                    },
+                )
+                referenced_delete = self.client.delete(
+                    '/api/config/categorias/Categor%C3%ADa%20nueva%20nombre'
+                )
+                unused_delete = self.client.delete(
+                    '/api/config/categorias/Categor%C3%ADa%20vac%C3%ADa'
+                )
+                config_response = self.client.get('/api/config/categorias')
+
+            self.assertEqual(create_response.status_code, 201)
+            self.assertEqual(duplicate_response.status_code, 409)
+            self.assertEqual(update_response.status_code, 200)
+            self.assertEqual(update_response.get_json()['categoria1'], 'Vivienda')
+            self.assertEqual(update_response.get_json()['categoria0'], 'Ingreso')
+            self.assertEqual(referenced_delete.status_code, 409)
+            self.assertEqual(unused_delete.status_code, 200)
+
+            conn = sqlite3.connect(db_path)
+            movement_category = conn.execute(
+                "SELECT categoria2 FROM movimientos WHERE clave = 'category-reference'"
+            ).fetchone()[0]
+            saved_budget = conn.execute(
+                '''
+                SELECT categoria2, importe_cent FROM presupuestos_mensuales
+                WHERE anio = 2026 AND mes = 1 AND importe_cent = 15000
+                '''
+            ).fetchone()
+            conn.close()
+            self.assertEqual(movement_category, 'Categoría nueva nombre')
+            self.assertEqual(saved_budget, ('Categoría nueva nombre', 15000))
+            categories = {
+                category['categoria2']: category
+                for category in config_response.get_json()['categorias']
+            }
+            self.assertNotIn('Categoría vacía', categories)
 
     def test_movimientos_can_return_all_filtered_rows_without_pagination(self):
         with tempfile.TemporaryDirectory() as tmpdir:

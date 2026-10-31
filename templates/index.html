@@ -4,8 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Gestión de gastos</title>
+    <script>
+      const savedTheme = localStorage.getItem('gestion-gastos-theme');
+      if (savedTheme === 'dark') document.documentElement.dataset.theme = 'dark';
+    </script>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20261025-02" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20261031-07" />
   </head>
   <body>
     <div class="container">
@@ -27,6 +31,15 @@
           <button id="tabBudgets" class="tab" type="button">Presupuestos</button>
         </div>
         <div class="tabs-tools" aria-label="Herramientas">
+          <button id="themeToggle" class="tab icon-tab theme-toggle" type="button" aria-pressed="false" aria-label="Cambiar a modo oscuro" title="Cambiar a modo oscuro">
+            <svg class="theme-icon-moon" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+              <path d="M20.2 15.4A8.5 8.5 0 0 1 8.6 3.8 8.5 8.5 0 1 0 20.2 15.4Z" />
+            </svg>
+            <svg class="theme-icon-sun" aria-hidden="true" viewBox="0 0 24 24" focusable="false">
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" />
+            </svg>
+          </button>
           <button id="refreshDataBtn" class="tab icon-tab" type="button" aria-label="Actualizar" title="Actualizar datos desde la base de datos">
             <svg aria-hidden="true" viewBox="0 0 24 24" focusable="false">
               <path d="M20 7v5h-5M4 17v-5h5" />
@@ -395,6 +408,46 @@
           </div>
         </details>
         <details class="panel table-panel balance-config-panel config-card">
+          <summary class="config-card-summary"><h2>Categorías</h2></summary>
+          <p class="muted">Crea categorías y edita su nombre, categoría superior o tipo. Renombrarlas conserva sus movimientos y presupuestos asociados. Solo se pueden eliminar categorías sin movimientos ni presupuestos.</p>
+          <form id="categoryConfigForm" class="category-config-form">
+            <label class="field-group">
+              Categoría 2
+              <input name="categoria2" type="text" required />
+            </label>
+            <label class="field-group">
+              Categoría 1
+              <input name="categoria1" type="text" required />
+            </label>
+            <label class="field-group">
+              Tipo
+              <select name="categoria0" required>
+                <option value="Gasto">Gasto</option>
+                <option value="Ingreso">Ingreso</option>
+                <option value="Interno">Interno</option>
+                <option value="Ahorro">Ahorro</option>
+                <option value="No computa">No computa</option>
+                <option value="PENDIENTE">PENDIENTE</option>
+              </select>
+            </label>
+            <button class="primary" type="submit">Añadir categoría</button>
+          </form>
+          <p id="categoryConfigStatus" class="import-summary" role="status"></p>
+          <div class="table-wrap">
+            <table class="category-config-table">
+              <thead>
+                <tr>
+                  <th>Categoría 2</th>
+                  <th>Categoría 1</th>
+                  <th>Tipo</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="categoryConfigRows"></tbody>
+            </table>
+          </div>
+        </details>
+        <details class="panel table-panel balance-config-panel config-card">
           <summary class="config-card-summary"><h2>Presupuestos por categoría</h2></summary>
           <p class="muted">Define un presupuesto independiente para cada categoría y mes. Deja una celda vacía para no asignar presupuesto ese mes.</p>
           <div class="budget-year-selector">
@@ -469,7 +522,7 @@
               <input id="budgetMonth" type="month" />
             </label>
           </div>
-          <div class="table-wrap">
+          <div class="table-wrap budget-report-table-wrap">
             <table class="budget-table">
               <thead>
                 <tr>
@@ -491,8 +544,16 @@
               <h2>Acumulado del año</h2>
               <p id="annualBudgetSummary" class="muted"></p>
             </div>
+            <div class="annual-budget-year">
+              <button id="annualBudgetPreviousYear" type="button" aria-label="Año anterior del acumulado">‹</button>
+              <label class="field-group" for="annualBudgetYear">
+                Año
+                <input id="annualBudgetYear" type="number" min="1900" max="2100" step="1" />
+              </label>
+              <button id="annualBudgetNextYear" type="button" aria-label="Año siguiente del acumulado">›</button>
+            </div>
           </div>
-          <div class="table-wrap">
+          <div class="table-wrap budget-report-table-wrap">
             <table class="budget-table">
               <thead>
                 <tr>
@@ -614,10 +675,10 @@
     </div>
 
     <div id="deleteConfirmModal" class="modal hidden" aria-hidden="true">
-      <div class="modal-content confirm-modal-content">
+      <div class="modal-content confirm-modal-content" role="dialog" aria-modal="true" aria-labelledby="deleteConfirmTitle" aria-describedby="deleteConfirmText">
         <div class="modal-header">
-          <h2>Confirmar eliminación</h2>
-          <button id="closeDeleteModal" type="button" class="close">×</button>
+          <h2 id="deleteConfirmTitle">Confirmar eliminación</h2>
+          <button id="closeDeleteModal" type="button" class="close" aria-label="Cerrar">×</button>
         </div>
 
         <p id="deleteConfirmText">¿Seguro que quieres borrar este movimiento?</p>
@@ -722,6 +783,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="{{ url_for('static', filename='app.js') }}?v=20261031-05"></script>
+    <script src="{{ url_for('static', filename='app.js') }}?v=20261031-07"></script>
   </body>
 </html>

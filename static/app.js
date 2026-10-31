@@ -24,6 +24,7 @@ let dashboardMovementsParams = new URLSearchParams();
 let dashboardRequestId = 0;
 
 const summaryEl = document.getElementById('summary');
+const themeToggle = document.getElementById('themeToggle');
 const refreshDataBtn = document.getElementById('refreshDataBtn');
 const tableBody = document.getElementById('movimientosBody');
 const searchInput = document.getElementById('searchInput');
@@ -47,6 +48,7 @@ const quickCategorySelect = document.getElementById('quickCategorySelect');
 const categoryModalError = document.getElementById('categoryModalError');
 const saveQuickCategoryBtn = document.getElementById('saveQuickCategoryBtn');
 const deleteConfirmModal = document.getElementById('deleteConfirmModal');
+const deleteConfirmTitle = document.getElementById('deleteConfirmTitle');
 const deleteConfirmText = document.getElementById('deleteConfirmText');
 const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
 const importPreviewModal = document.getElementById('importPreviewModal');
@@ -74,6 +76,9 @@ const budgetsView = document.getElementById('budgetsView');
 const savingsView = document.getElementById('savingsView');
 const accountConfigBody = document.getElementById('accountConfigBody');
 const accountConfigStatus = document.getElementById('accountConfigStatus');
+const categoryConfigForm = document.getElementById('categoryConfigForm');
+const categoryConfigRows = document.getElementById('categoryConfigRows');
+const categoryConfigStatus = document.getElementById('categoryConfigStatus');
 const budgetConfigBody = document.getElementById('budgetConfigBody');
 const budgetConfigStatus = document.getElementById('budgetConfigStatus');
 const balanceHistoryMonthsInput = document.getElementById('balanceHistoryMonths');
@@ -84,6 +89,7 @@ const budgetTotals = document.getElementById('budgetTotals');
 const annualBudgetSummary = document.getElementById('annualBudgetSummary');
 const annualBudgetRows = document.getElementById('annualBudgetRows');
 const annualBudgetTotals = document.getElementById('annualBudgetTotals');
+const annualBudgetYearInput = document.getElementById('annualBudgetYear');
 const budgetBudgetHeader = document.getElementById('budgetBudgetHeader');
 const budgetActualHeader = document.getElementById('budgetActualHeader');
 const budgetConfigYearInput = document.getElementById('budgetConfigYear');
@@ -161,6 +167,7 @@ let selectedDashboardCategories = {
   categoria2: null,
 };
 let pendingDeleteId = null;
+let pendingDeleteAction = null;
 let categoryMovementId = null;
 let activeRangePreset = null;
 let activeViewName = 'dashboard';
@@ -1343,6 +1350,7 @@ async function loadOptions() {
   const data = await fetchJson('/api/options');
   populateSelect(fuenteFilter, data.fuentes, 'Todas las fuentes');
   populateSelect(categoriaFilter, data.categorias, 'Todas las categorías');
+  populateSelect(editForm.elements['categoria2'], data.categorias, 'Selecciona una categoría');
 
   if (state.fuente) {
     fuenteFilter.value = state.fuente;
@@ -1683,15 +1691,17 @@ async function loadAccountConfig() {
   accountConfigStatus.textContent = '';
   const budgetYear = Number(budgetConfigYearInput.value) || new Date().getFullYear();
   budgetConfigYearInput.value = String(budgetYear);
-  const [data, , budgetData] = await Promise.all([
+  const [data, , budgetData, categoryData] = await Promise.all([
     fetchJson('/api/config/cuentas'),
     loadSavingsProjectionConfig(),
     fetchJson(`/api/config/presupuestos?year=${budgetYear}`),
+    fetchJson('/api/config/categorias'),
   ]);
   balanceHistoryMonthsInput.value = String(data.meses_saldo_historico || 18);
   savedBalanceHistoryMonths = balanceHistoryMonthsInput.value;
   balanceHistoryConfigStatus.textContent = '';
   renderBudgetConfig(budgetData);
+  renderCategoryConfig(categoryData.categorias);
   accountConfigBody.replaceChildren();
 
   if (!data.cuentas.length) {
@@ -1762,6 +1772,148 @@ async function loadAccountConfig() {
     accountConfigBody.appendChild(row);
   });
 }
+
+function getCategoryTypeOptions(selectedValue) {
+  const values = ['Gasto', 'Ingreso', 'Interno', 'Ahorro', 'No computa', 'PENDIENTE'];
+  return values.map((value) => {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = value;
+    option.selected = value === selectedValue;
+    return option;
+  });
+}
+
+function createCategoryActionIcon(paths) {
+  const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  icon.setAttribute('aria-hidden', 'true');
+  icon.setAttribute('viewBox', '0 0 24 24');
+  icon.setAttribute('focusable', 'false');
+  paths.forEach((pathData) => {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', pathData);
+    icon.appendChild(path);
+  });
+  return icon;
+}
+
+function renderCategoryConfig(categories) {
+  categoryConfigRows.replaceChildren();
+  categories.forEach((category) => {
+    const row = document.createElement('tr');
+    const nameCell = document.createElement('td');
+    const parentCell = document.createElement('td');
+    const typeCell = document.createElement('td');
+    const actionsCell = document.createElement('td');
+    const nameInput = document.createElement('input');
+    const parentInput = document.createElement('input');
+    const typeSelect = document.createElement('select');
+    nameInput.value = category.categoria2;
+    parentInput.value = category.categoria1;
+    nameInput.setAttribute('aria-label', `Nombre de la categoría ${category.categoria2}`);
+    parentInput.setAttribute('aria-label', `Categoría superior de ${category.categoria2}`);
+    typeSelect.setAttribute('aria-label', `Tipo de ${category.categoria2}`);
+    typeSelect.append(...getCategoryTypeOptions(category.categoria0));
+    nameCell.appendChild(nameInput);
+    parentCell.appendChild(parentInput);
+    typeCell.appendChild(typeSelect);
+
+    const saveButton = document.createElement('button');
+    saveButton.type = 'button';
+    saveButton.className = 'action-btn';
+    saveButton.appendChild(createCategoryActionIcon([
+      'M5 3h12l4 4v14H3V3h2Z',
+      'M7 3v6h10V3',
+      'M7 21v-7h10v7Z',
+    ]));
+    saveButton.title = 'Guardar categoría';
+    saveButton.setAttribute('aria-label', `Guardar categoría ${category.categoria2}`);
+    saveButton.addEventListener('click', async () => {
+      saveButton.disabled = true;
+      try {
+        await fetchJson(`/api/config/categorias/${encodeURIComponent(category.categoria2)}`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            categoria2: nameInput.value,
+            categoria1: parentInput.value,
+            categoria0: typeSelect.value,
+          }),
+        });
+        categoryConfigStatus.textContent = `Categoría ${nameInput.value.trim()} guardada.`;
+        await loadAccountConfig();
+        await loadOptions();
+      } catch (error) {
+        categoryConfigStatus.textContent = error.message;
+      } finally {
+        saveButton.disabled = false;
+      }
+    });
+
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'action-btn';
+    deleteButton.appendChild(createCategoryActionIcon([
+      'M4 7h16',
+      'M10 11v6m4-6v6',
+      'M5 7l1 14h12l1-14Z',
+      'M9 7V4h6v3',
+    ]));
+    deleteButton.title = 'Eliminar categoría';
+    deleteButton.setAttribute('aria-label', `Eliminar categoría ${category.categoria2}`);
+    deleteButton.addEventListener('click', async () => {
+      pendingDeleteId = null;
+      pendingDeleteAction = async () => {
+        deleteButton.disabled = true;
+        try {
+          await fetchJson(`/api/config/categorias/${encodeURIComponent(category.categoria2)}`, {
+            method: 'DELETE',
+          });
+          categoryConfigStatus.textContent = `Categoría ${category.categoria2} eliminada.`;
+          await loadAccountConfig();
+          await loadOptions();
+        } catch (error) {
+          categoryConfigStatus.textContent = error.message;
+        } finally {
+          deleteButton.disabled = false;
+        }
+      };
+      deleteConfirmTitle.textContent = 'Eliminar categoría';
+      deleteConfirmText.textContent = `¿Eliminar la categoría ${category.categoria2}? Solo se puede eliminar si no tiene movimientos ni presupuestos asociados.`;
+      confirmDeleteBtn.textContent = 'Eliminar';
+      deleteConfirmModal.classList.remove('hidden');
+      deleteConfirmModal.setAttribute('aria-hidden', 'false');
+      confirmDeleteBtn.focus();
+    });
+    actionsCell.append(saveButton, deleteButton);
+    row.append(nameCell, parentCell, typeCell, actionsCell);
+    categoryConfigRows.appendChild(row);
+  });
+}
+
+categoryConfigForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const formData = new FormData(categoryConfigForm);
+  const submitButton = categoryConfigForm.querySelector('button[type="submit"]');
+  submitButton.disabled = true;
+  try {
+    const created = await fetchJson('/api/config/categorias', {
+      method: 'POST',
+      body: JSON.stringify({
+        categoria2: formData.get('categoria2'),
+        categoria1: formData.get('categoria1'),
+        categoria0: formData.get('categoria0'),
+      }),
+    });
+    categoryConfigStatus.textContent = `Categoría ${created.categoria2} creada.`;
+    categoryConfigForm.reset();
+    await loadAccountConfig();
+    await loadOptions();
+  } catch (error) {
+    categoryConfigStatus.textContent = error.message;
+  } finally {
+    submitButton.disabled = false;
+  }
+});
 
 const budgetMonthLabels = [
   'Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun',
@@ -2017,11 +2169,17 @@ function renderAnnualBudgetReport(data) {
     : `Todavía no hay meses completos en ${data.year}.`;
   annualBudgetRows.replaceChildren();
 
-  data.groups.forEach((group) => {
+  data.groups.forEach((group, groupIndex) => {
     const groupRow = document.createElement('tr');
     groupRow.className = 'budget-group-row';
     const groupName = document.createElement('td');
-    groupName.textContent = group.categoria1;
+    const toggle = document.createElement('button');
+    toggle.className = 'budget-group-toggle';
+    toggle.type = 'button';
+    toggle.dataset.groupIndex = String(groupIndex);
+    toggle.setAttribute('aria-expanded', 'false');
+    toggle.textContent = group.categoria1;
+    groupName.appendChild(toggle);
     groupRow.append(groupName, document.createElement('td'));
     addBudgetMoneyCell(groupRow, group.budget_cent);
     addBudgetMoneyCell(groupRow, group.actual_cent);
@@ -2031,6 +2189,8 @@ function renderAnnualBudgetReport(data) {
     group.children.forEach((category) => {
       const row = document.createElement('tr');
       row.className = 'budget-detail-row';
+      row.dataset.groupIndex = String(groupIndex);
+      row.hidden = true;
       row.appendChild(document.createElement('td'));
       const categoryName = document.createElement('td');
       categoryName.textContent = category.categoria2;
@@ -2053,6 +2213,20 @@ function renderAnnualBudgetReport(data) {
   addBudgetMoneyCell(totalRow, data.difference_total_cent, true);
   annualBudgetTotals.appendChild(totalRow);
 }
+
+annualBudgetRows.addEventListener('click', (event) => {
+  const groupRow = event.target.closest('.budget-group-row');
+  const toggle = groupRow?.querySelector('.budget-group-toggle');
+  if (!toggle) return;
+
+  const expanded = toggle.getAttribute('aria-expanded') === 'true';
+  toggle.setAttribute('aria-expanded', String(!expanded));
+  annualBudgetRows.querySelectorAll('.budget-detail-row').forEach((row) => {
+    if (row.dataset.groupIndex === toggle.dataset.groupIndex) {
+      row.hidden = expanded;
+    }
+  });
+});
 
 function renderBudgetMovementDetails(cell, items) {
   if (!items.length) {
@@ -2161,7 +2335,10 @@ budgetRows.addEventListener('click', async (event) => {
 async function loadBudgets() {
   const month = budgetMonth.value || new Date().toISOString().slice(0, 7);
   budgetMonth.value = month;
-  const data = await fetchJson(`/api/presupuestos?month=${encodeURIComponent(month)}`);
+  const annualYear = Number(annualBudgetYearInput.value) || new Date().getFullYear();
+  annualBudgetYearInput.value = String(annualYear);
+  const params = new URLSearchParams({ month, annual_year: String(annualYear) });
+  const data = await fetchJson(`/api/presupuestos?${params.toString()}`);
   renderBudgetReport(data);
 }
 
@@ -2867,6 +3044,16 @@ tabBudgets.addEventListener('click', () => setActiveView('budgets'));
 tabSavings.addEventListener('click', () => setActiveView('savings'));
 budgetMonth.value = new Date().toISOString().slice(0, 7);
 budgetMonth.addEventListener('change', loadBudgets);
+annualBudgetYearInput.value = String(new Date().getFullYear());
+annualBudgetYearInput.addEventListener('change', loadBudgets);
+document.getElementById('annualBudgetPreviousYear').addEventListener('click', () => {
+  annualBudgetYearInput.value = String(Number(annualBudgetYearInput.value) - 1);
+  loadBudgets();
+});
+document.getElementById('annualBudgetNextYear').addEventListener('click', () => {
+  annualBudgetYearInput.value = String(Number(annualBudgetYearInput.value) + 1);
+  loadBudgets();
+});
 budgetConfigYearInput.value = String(new Date().getFullYear());
 document.getElementById('budgetConfigPreviousYear').addEventListener(
   'click',
@@ -3026,6 +3213,10 @@ function closeDeleteModal() {
   deleteConfirmModal.classList.add('hidden');
   deleteConfirmModal.setAttribute('aria-hidden', 'true');
   pendingDeleteId = null;
+  pendingDeleteAction = null;
+  deleteConfirmTitle.textContent = 'Confirmar eliminación';
+  deleteConfirmText.textContent = '¿Seguro que quieres borrar este movimiento?';
+  confirmDeleteBtn.textContent = 'Borrar';
 }
 
 document.getElementById('closeModal').addEventListener('click', closeModal);
@@ -3066,6 +3257,17 @@ categoryForm.addEventListener('submit', async (event) => {
 document.getElementById('closeDeleteModal').addEventListener('click', closeDeleteModal);
 document.getElementById('cancelDeleteModal').addEventListener('click', closeDeleteModal);
 confirmDeleteBtn.addEventListener('click', async () => {
+  if (pendingDeleteAction) {
+    confirmDeleteBtn.disabled = true;
+    try {
+      await pendingDeleteAction();
+    } finally {
+      closeDeleteModal();
+      confirmDeleteBtn.disabled = false;
+    }
+    return;
+  }
+
   if (!pendingDeleteId) return;
 
   await fetchJson(`/api/movimientos/${pendingDeleteId}`, { method: 'DELETE' });
@@ -3173,9 +3375,43 @@ editForm.addEventListener('submit', async (event) => {
 });
 
 (async function init() {
+  initializeTheme();
   initializeSortableTables();
   populateEditCategoryOptions();
   await loadOptions();
   await loadSummary();
   setActiveView('dashboard');
 })();
+
+function initializeTheme() {
+  const isDark = document.documentElement.dataset.theme === 'dark';
+  applyChartTheme();
+  updateThemeControls(isDark);
+  themeToggle.addEventListener('click', () => {
+    const enableDark = document.documentElement.dataset.theme !== 'dark';
+    if (enableDark) {
+      document.documentElement.dataset.theme = 'dark';
+    } else {
+      delete document.documentElement.dataset.theme;
+    }
+    localStorage.setItem('gestion-gastos-theme', enableDark ? 'dark' : 'light');
+    updateThemeControls(enableDark);
+    applyChartTheme();
+  });
+}
+
+function applyChartTheme() {
+  const styles = getComputedStyle(document.documentElement);
+  Chart.defaults.color = styles.getPropertyValue('--muted').trim();
+  Chart.defaults.borderColor = styles.getPropertyValue('--border').trim();
+  [savingsChartInstance, savingsColumnsChartInstance].forEach((chart) => chart?.update());
+}
+
+function updateThemeControls(isDark) {
+  themeToggle.setAttribute('aria-pressed', String(isDark));
+  themeToggle.setAttribute(
+    'aria-label',
+    isDark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro',
+  );
+  themeToggle.title = isDark ? 'Cambiar a modo claro' : 'Cambiar a modo oscuro';
+}
