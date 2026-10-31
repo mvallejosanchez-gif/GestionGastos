@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import re
 import sqlite3
 import unicodedata
 from datetime import datetime
@@ -531,14 +532,49 @@ def detect_parser(path: Path):
     return None
 
 
-def collect_input_rows(input_dir: Path | str = DEFAULT_INPUT_DIR) -> tuple[list[dict], int]:
+def _date_from_filename(name: str) -> datetime | None:
+    patterns = (
+        (re.compile(r'(?<!\d)(\d{4})[Yy][\s_.-]*(\d{1,2})[Mm][\s_.-]*(\d{1,2})[Dd]'), 'ymd'),
+        (re.compile(r'(?<!\d)(\d{4})[-_. ](\d{1,2})[-_. ](\d{1,2})(?!\d)'), 'ymd'),
+        (re.compile(r'(?<!\d)(\d{1,2})[-_. ](\d{1,2})[-_. ](\d{4})(?!\d)'), 'dmy'),
+        (re.compile(r'(?<!\d)(\d{8})(?!\d)'), 'compact'),
+    )
+    dates = []
+    for pattern, date_format in patterns:
+        for match in pattern.finditer(name):
+            try:
+                if date_format == 'ymd':
+                    value = datetime(int(match[1]), int(match[2]), int(match[3]))
+                elif date_format == 'dmy':
+                    value = datetime(int(match[3]), int(match[2]), int(match[1]))
+                else:
+                    compact = match[1]
+                    if 1900 <= int(compact[:4]) <= 2100:
+                        value = datetime.strptime(compact, '%Y%m%d')
+                    else:
+                        value = datetime.strptime(compact, '%d%m%Y')
+                dates.append(value)
+            except ValueError:
+                continue
+    return max(dates, default=None)
+
+
+def _collect_input_rows_with_cleanup(
+    input_dir: Path | str = DEFAULT_INPUT_DIR,
+) -> tuple[list[dict], int, list[str]]:
     input_dir = Path(input_dir)
     if not input_dir.exists():
-        return [], 0
+        return [], 0, []
 
-    all_rows: list[dict] = []
-    processed_files = 0
-
+    bank_by_parser = {
+        parse_trade_republic_csv: 'TRADE REPUBLIC',
+        parse_revolut_csv: 'REVOLUT',
+        parse_pibank_xlsx: 'PIBANK',
+        parse_bankinter_xlsx: 'BANKINTER',
+        parse_bbva_xlsx: 'BBVA',
+        parse_efectivo_xlsx: 'EFECTIVO',
+    }
+    parsed_files = []
     for path in sorted(input_dir.iterdir()):
         if not path.is_file():
             continue
@@ -547,22 +583,75 @@ def collect_input_rows(input_dir: Path | str = DEFAULT_INPUT_DIR) -> tuple[list[
             continue
         try:
             parsed = parser(path)
-            for row in parsed:
-                if row.get('f_valor') is None and row.get('fecha') is not None:
-                    row['f_valor'] = row['fecha']
-                if row.get('fecha') is None and row.get('f_valor') is not None:
-                    row['fecha'] = row['f_valor']
-                row['fuente'] = normalize_text(row.get('fuente')) or path.stem
-                row['categoria2'] = normalize_text(row.get('categoria2')) or 'PENDIENTE'
-                row['categoria1'] = normalize_text(row.get('categoria1')) or 'PENDIENTE'
-                row['categoria0'] = normalize_text(row.get('categoria0')) or 'PENDIENTE'
-                row['source_file'] = path.name
-                all_rows.append(row)
-            processed_files += 1
         except Exception:
             continue
+        parsed_files.append({
+            'path': path,
+            'bank': bank_by_parser[parser],
+            'rows': parsed,
+            'modified': path.stat().st_mtime,
+            'filename_date': _date_from_filename(path.name),
+        })
 
-    return all_rows, processed_files
+    files_by_bank = {}
+    for entry in parsed_files:
+        files_by_bank.setdefault(entry['bank'], []).append(entry)
+
+    retained_files = []
+    deleted_files = []
+    for bank_files in files_by_bank.values():
+        newest = max(
+            bank_files,
+            key=lambda entry: (
+                entry['filename_date'].timestamp()
+                if entry['filename_date'] is not None
+                else entry['modified'],
+                entry['modified'],
+                entry['path'].name.casefold(),
+            ),
+        )
+        retained_files.append(newest)
+        for entry in bank_files:
+            if entry is newest:
+                continue
+            entry['path'].unlink()
+            deleted_files.append(entry['path'].name)
+
+    all_rows = []
+    for entry in sorted(retained_files, key=lambda item: item['path'].name.casefold()):
+        path = entry['path']
+        for row in entry['rows']:
+            if row.get('f_valor') is None and row.get('fecha') is not None:
+                row['f_valor'] = row['fecha']
+            if row.get('fecha') is None and row.get('f_valor') is not None:
+                row['fecha'] = row['f_valor']
+            row['fuente'] = normalize_text(row.get('fuente')) or path.stem
+            row['categoria2'] = normalize_text(row.get('categoria2')) or 'PENDIENTE'
+            row['categoria1'] = normalize_text(row.get('categoria1')) or 'PENDIENTE'
+            row['categoria0'] = normalize_text(row.get('categoria0')) or 'PENDIENTE'
+            row['source_file'] = path.name
+            all_rows.append(row)
+
+    return all_rows, len(retained_files), deleted_files
+
+
+def collect_input_rows(
+    input_dir: Path | str = DEFAULT_INPUT_DIR,
+    include_deleted_files: bool = False,
+) -> tuple[list[dict], int] | tuple[list[dict], int, list[str]]:
+    rows, processed_files, deleted_files = _collect_input_rows_with_cleanup(input_dir)
+    if include_deleted_files:
+        return rows, processed_files, deleted_files
+    return rows, processed_files
+
+
+def collect_input_rows_for_import(input_dir: Path | str) -> tuple[list[dict], int, list[str]]:
+    collected = collect_input_rows(input_dir, include_deleted_files=True)
+    if len(collected) == 3:
+        rows, processed_files, deleted_files = collected
+        return rows, processed_files, deleted_files
+    rows, processed_files = collected
+    return rows, processed_files, []
 
 
 def preview_import_files(input_dir: Path | str = DEFAULT_INPUT_DIR, db_path: Path | str = DEFAULT_DB_PATH) -> dict:
@@ -576,7 +665,7 @@ def preview_import_files(input_dir: Path | str = DEFAULT_INPUT_DIR, db_path: Pat
     if schema_sql.exists():
         conn.executescript(schema_sql.read_text(encoding='utf-8'))
 
-    all_rows, processed_files = collect_input_rows(input_dir)
+    all_rows, processed_files, deleted_files = collect_input_rows_for_import(input_dir)
     existing_claves = {row[0] for row in conn.execute('SELECT clave FROM movimientos WHERE clave IS NOT NULL')}
     existing_match_keys = existing_import_match_keys(conn)
     snapshot_updates = find_missing_snapshot_updates(conn, all_rows)
@@ -636,6 +725,7 @@ def preview_import_files(input_dir: Path | str = DEFAULT_INPUT_DIR, db_path: Pat
         'rows': preview_rows,
         'count': len(preview_rows),
         'files': processed_files,
+        'deleted_files': deleted_files,
         'message': 'Registros pendientes de importación',
     }
 
@@ -644,6 +734,7 @@ def import_files(
     input_dir: Path | str = DEFAULT_INPUT_DIR,
     db_path: Path | str = DEFAULT_DB_PATH,
     selected_keys: set[str] | None = None,
+    row_overrides: dict[str, dict] | None = None,
 ) -> dict:
     input_dir = Path(input_dir)
     db_path = Path(db_path)
@@ -655,7 +746,7 @@ def import_files(
     if schema_sql.exists():
         conn.executescript(schema_sql.read_text(encoding='utf-8'))
 
-    all_rows, processed_files = collect_input_rows(input_dir)
+    all_rows, processed_files, deleted_files = collect_input_rows_for_import(input_dir)
     existing_claves = {row[0] for row in conn.execute('SELECT clave FROM movimientos WHERE clave IS NOT NULL')}
     existing_match_keys = existing_import_match_keys(conn)
     snapshot_updates = find_missing_snapshot_updates(conn, all_rows, selected_keys)
@@ -684,12 +775,15 @@ def import_files(
         seen_match_keys.update(match_keys)
         if selected_keys is not None and clave not in selected_keys:
             continue
+        if row_overrides and clave in row_overrides:
+            row.update(row_overrides[clave])
         pending_rows.append(row)
 
     summary = insert_rows(conn, pending_rows)
     conn.close()
     summary['updated'] = updated
     summary['files'] = processed_files
+    summary['deleted_files'] = deleted_files
     summary['message'] = 'Importación completada'
     return summary
 

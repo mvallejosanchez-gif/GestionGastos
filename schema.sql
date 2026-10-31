@@ -14,7 +14,10 @@ CREATE TABLE IF NOT EXISTS cuentas (
   fuente                    TEXT PRIMARY KEY COLLATE NOCASE,
   contabilidad2             TEXT NOT NULL,            -- BANCO / EFECTIVO
   disponible_cero           INTEGER NOT NULL DEFAULT 0, -- 1 = el disponible calculado es siempre 0
-  ahorro_no_disponible_cent INTEGER NOT NULL DEFAULT 0  -- se resta del disponible
+  ahorro_no_disponible_cent INTEGER NOT NULL DEFAULT 0, -- se resta del disponible
+  incluir_en_saldos         INTEGER NOT NULL DEFAULT 1, -- mostrar en la pestaña Saldos
+  incluir_en_resumen        INTEGER NOT NULL DEFAULT 1, -- mostrar en la pestaña Resumen
+  saldo_por_movimientos     INTEGER NOT NULL DEFAULT 0  -- acumular importes e ignorar snapshots
 );
 
 CREATE TABLE IF NOT EXISTS movimientos (

@@ -177,7 +177,7 @@ h1 {
 
 .filters {
   display: grid;
-  grid-template-columns: minmax(200px, 2fr) repeat(4, minmax(140px, 1fr)) auto;
+  grid-template-columns: minmax(200px, 2fr) repeat(6, minmax(110px, 1fr)) auto;
   gap: 12px;
   align-items: end;
   margin-bottom: 20px;
@@ -465,6 +465,18 @@ tbody tr:hover {
   min-width: 720px;
 }
 
+.budget-config-table {
+  min-width: 680px;
+}
+
+.account-config-table {
+  min-width: 760px;
+}
+
+.budget-config-table .currency-input {
+  max-width: 180px;
+}
+
 .budget-table .budget-group-row td {
   border-top: 1px solid var(--border);
   font-weight: 700;
@@ -493,7 +505,21 @@ tbody tr:hover {
   transform: rotate(90deg);
 }
 
+.budget-table .budget-category-toggle {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
 .budget-table .budget-detail-row[hidden] {
+  display: none;
+}
+
+.budget-table .budget-transactions-row[hidden] {
   display: none;
 }
 
@@ -645,6 +671,10 @@ tbody tr:hover {
   gap: 8px;
 }
 
+.form-grid label[hidden] {
+  display: none;
+}
+
 .currency-input {
   position: relative;
   width: 100%;
@@ -686,6 +716,64 @@ tbody tr:hover {
 .savings-chart-wrap {
   position: relative;
   height: 380px;
+}
+
+.savings-date-range {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+}
+
+.savings-date-range .field-group {
+  min-width: 180px;
+}
+
+.savings-columns-chart-section {
+  margin-top: 28px;
+  border-top: 1px solid var(--border);
+  padding-top: 18px;
+}
+
+.savings-columns-chart-section h3,
+.config-card h3 {
+  margin: 0 0 8px;
+}
+
+.savings-column-toggles,
+.savings-columns-config {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.savings-column-toggle {
+  border: 1px solid var(--savings-column-color);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--savings-column-color);
+  padding: 6px 11px;
+  cursor: pointer;
+}
+
+.savings-column-toggle[aria-pressed="false"] {
+  border-color: var(--border);
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.savings-column-config-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.savings-column-config-option input {
+  margin: 0;
 }
 
 .savings-records-panel {
@@ -757,12 +845,78 @@ tbody tr:hover {
   margin-bottom: 16px;
 }
 
-.dashboard-total-card {
+.dashboard-summary-cards {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
   flex-shrink: 0;
 }
 
-.dashboard-category-filter {
-  justify-content: flex-end;
+.dashboard-total-card {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+  min-width: 0;
+  padding: 12px 14px;
+}
+
+.dashboard-total-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 28px;
+}
+
+.dashboard-total-item .label {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.dashboard-total-item .value {
+  font-size: 1.1rem;
+  white-space: nowrap;
+}
+
+.dashboard-bank-totals {
+  display: grid;
+  grid-template-columns: max-content max-content max-content;
+  align-items: baseline;
+  align-content: start;
+  min-width: 0;
+  row-gap: 4px;
+  padding: 10px 14px;
+  font-size: 0.78rem;
+}
+
+/* Las filas no generan caja propia para que todas compartan las mismas columnas */
+.dashboard-bank-total {
+  display: contents;
+}
+
+.dashboard-bank-total > :first-child {
+  white-space: nowrap;
+}
+
+.dashboard-bank-total > :not(:first-child) {
+  padding-left: 28px;
+  text-align: right;
+}
+
+.dashboard-bank-totals > .muted {
+  grid-column: 1 / -1;
+}
+
+.dashboard-bank-total strong {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.dashboard-bank-total-header > * {
+  color: var(--muted);
+  font-size: 0.75rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 3px;
+  margin-bottom: 2px;
 }
 
 .summary-card.large {
@@ -904,14 +1058,6 @@ tbody tr:hover {
   gap: 18px;
 }
 
-.dashboard-category-filter {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin: -4px 0 14px;
-}
-
 .dashboard-box {
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -919,9 +1065,49 @@ tbody tr:hover {
   padding: 16px;
 }
 
-.dashboard-box h3 {
-  margin-top: 0;
+.dashboard-category-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin-bottom: 12px;
+}
+
+.dashboard-category-heading h3 {
+  margin: 0;
+}
+
+.dashboard-category-clear {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: white;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.dashboard-category-clear svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.dashboard-category-clear:not(:disabled):hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+.dashboard-category-clear:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .dashboard-category-box {
@@ -1045,13 +1231,41 @@ tbody tr:hover {
   border-radius: 2px;
 }
 
-.balance-config-panel {
+.balance-config-panel,
+.config-card + .config-card {
   margin-top: 14px;
 }
 
-.balance-config-panel h2 {
-  margin: 0 0 8px;
+.config-card > .config-card-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.config-card > .config-card-summary::-webkit-details-marker {
+  display: none;
+}
+
+.config-card > .config-card-summary::before {
+  content: "▶";
+  color: var(--muted);
+  font-size: 0.7rem;
+  transition: transform 0.15s ease;
+}
+
+.config-card[open] > .config-card-summary::before {
+  transform: rotate(90deg);
+}
+
+.config-card-summary h2 {
+  margin: 0;
   font-size: 1.1rem;
+}
+
+.config-card[open] > .config-card-summary {
+  margin-bottom: 12px;
 }
 
 .balance-config-controls {
@@ -1062,6 +1276,12 @@ tbody tr:hover {
 
 .balance-config-controls .field-group {
   width: min(220px, 100%);
+}
+
+.balance-banks-summary {
+  margin: -4px 0 12px;
+  color: var(--muted);
+  font-size: 0.82rem;
 }
 
 .dashboard-category-chart {
@@ -1264,5 +1484,11 @@ tbody tr:hover {
 
   .form-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .dashboard-summary-cards {
+    flex-wrap: wrap;
   }
 }

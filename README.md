@@ -5,12 +5,12 @@ Aplicación web local para consultar y gestionar movimientos financieros almacen
 ## Funcionalidades
 
 - **Resumen:** consulta de gastos por fuente y por niveles de categoría, con filtros por fecha.
-- **Saldos:** visualización del histórico de saldos y ajuste del periodo histórico y de los parámetros de cada cuenta.
-- **Movimientos:** listado con scroll y cabecera fija, búsqueda y filtros por fuente, categoría y fechas. Permite crear, editar, duplicar y eliminar movimientos, cambiar categorías y exportar los resultados a Excel.
-- **Evolución ahorro:** pestaña integrada en la aplicación para consultar la gráfica de ahorro total, ahorro hipotético y extrapolación; permite añadir y editar registros de la tabla `ahorro` desde un modal.
-- **Importación:** previsualización de movimientos nuevos encontrados en `input/`, selección de registros e importación a la base de datos. Se omiten duplicados ya importados.
-- **Presupuestos:** consulta de presupuestos mensuales por categoría.
-- **Configuración:** ajustes de cuentas, del histórico de saldos y del horizonte de extrapolación del ahorro.
+- **Saldos:** visualización del histórico de saldos y ajuste del periodo histórico y de los parámetros de cada cuenta. EFECTIVO se reconstruye desde un saldo inicial de 0,00 € anterior a su primer movimiento, ignorando los snapshots guardados. AMAZON también se configura para acumular los importes de sus movimientos e ignorar snapshots, de modo que su saldo cambia según la fecha seleccionada.
+- **Movimientos:** listado con scroll y cabecera fija, búsqueda global en todos los campos y registros, filtros por fuente, categoría, fechas e importe (un único importe mínimo busca ese importe exacto; con ambos extremos se filtra por rango). La ordenación de las columnas se aplica a todos los resultados antes de paginar y también se conserva al exportar. Permite crear, editar, duplicar y eliminar movimientos, cambiar categorías y exportar los resultados a Excel.
+- **Evolución ahorro:** pestaña integrada en la aplicación para consultar las gráficas de ahorro total, ahorro hipotético y extrapolación, además de la evolución mensual apilada de cada columna de saldo seleccionada. Un único rango de fechas filtra las dos gráficas y se conserva entre sesiones. Permite añadir y editar registros de la tabla `ahorro` desde un modal.
+- **Importación:** previsualización de movimientos nuevos encontrados en `input/`, selección de registros e importación a la base de datos. Antes de importar se puede asignar categoría y comentarios a cada fila. Si hay varios archivos compatibles del mismo banco, se conserva el más reciente (fecha del nombre o, si no hay, fecha de modificación) y se eliminan los anteriores al revisar la importación. Se omiten duplicados ya importados.
+- **Presupuestos:** consulta mensual por categoría, con despliegue de los movimientos que forman el gasto.
+- **Configuración:** ajustes de cuentas, presupuestos mensuales por categoría, del histórico de saldos y del horizonte de extrapolación del ahorro.
 - **Tablas:** cabeceras fijas y scroll interno en las tablas de todas las pestañas, sin controles de paginación. Los movimientos se cargan por bloques al desplazarse para agilizar la apertura y los filtros.
 
 ## Extrapolación del ahorro
@@ -26,7 +26,7 @@ La ventana **N** se define en **Configuración → Extrapolación del ahorro** c
 
 El horizonte de la gráfica se configura por separado en **Años de proyección**, se guarda como `anios_proyeccion_ahorro` y admite de 1 a 50 años (5 por defecto). Cada forecast se extiende hasta `12 × años` meses. Son proyecciones lineales: no incluyen rendimientos, inflación ni cambios futuros en aportaciones.
 
-Los registros se pueden añadir o editar desde **Evolución ahorro**. Al añadir uno nuevo, el formulario propone la fecha actual y copia los saldos del último registro para que solo haya que cambiar los que varíen. El formulario incluye las columnas de la tabla `ahorro`; el ahorro total y el hipotético se calculan y no se editan directamente.
+Los registros se pueden añadir o editar desde **Evolución ahorro**. Al añadir uno nuevo, el formulario propone la fecha actual y copia los saldos del último registro para que solo haya que cambiar los que varíen. En **Configuración → Columnas de ahorro** se seleccionan los saldos de la gráfica y los que aparecen en el modal. Si una columna de saldo se oculta del modal, se guarda como 0 en la base de datos. El ahorro total y el hipotético se calculan y no se editan directamente.
 
 ## Requisitos
 
@@ -71,7 +71,7 @@ Abre <http://localhost:5000> en el navegador. Para detener el servidor, pulsa `C
 
 ## Importar movimientos
 
-1. Coloca los extractos en la carpeta `input/` (se procesa su contenido, no sus subcarpetas).
+1. Coloca los extractos en la carpeta `input/` (se procesa su contenido, no sus subcarpetas). Si hay varios archivos compatibles del mismo banco, al abrir la vista previa se conserva el más reciente por fecha del nombre; si el nombre no incluye una fecha reconocible, se usa la fecha de modificación. Los anteriores se eliminan de `input/` en ese momento.
 2. Abre la sección **Importar** en la aplicación.
 3. Revisa los movimientos detectados, selecciona los que quieras añadir y confirma la importación.
 

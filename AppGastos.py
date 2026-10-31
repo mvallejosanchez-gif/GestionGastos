@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import json
 import math
 import sqlite3
 import uuid
@@ -16,7 +17,7 @@ from importar_input import import_files, preview_import_files
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / 'gastos.db'
 
-MONTHLY_BUDGETS_CENTS = {
+DEFAULT_MONTHLY_BUDGETS_CENTS = {
     'Mantenimiento Casa': 3000,
     'Prestamo': 69800,
     'Agua': 2500,
@@ -64,6 +65,7 @@ AHORRO_AMOUNT_COLUMNS = (
     'Aportaciones Abuela',
 )
 AHORRO_TOTAL_COLUMNS = AHORRO_AMOUNT_COLUMNS[:11]
+AHORRO_BALANCE_COLUMNS = AHORRO_TOTAL_COLUMNS
 AHORRO_TEXT_COLUMNS = ('Mes', 'Considerado en grafica?', 'Comentarios')
 
 
@@ -97,6 +99,55 @@ def ensure_app_settings(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def get_savings_column_settings(conn: sqlite3.Connection) -> dict[str, list[str]]:
+    defaults = {
+        'columnas_grafica_ahorro': list(AHORRO_BALANCE_COLUMNS),
+        'columnas_modal_ahorro': list(AHORRO_BALANCE_COLUMNS),
+    }
+    ensure_app_settings(conn)
+    conn.executemany(
+        'INSERT OR IGNORE INTO app_config (clave, valor) VALUES (?, ?)',
+        (
+            (key, json.dumps(value, ensure_ascii=False))
+            for key, value in defaults.items()
+        ),
+    )
+    rows = conn.execute(
+        'SELECT clave, valor FROM app_config WHERE clave IN (?, ?)',
+        tuple(defaults),
+    )
+    settings = {}
+    valid_columns = set(AHORRO_BALANCE_COLUMNS)
+    for row in rows:
+        try:
+            configured = json.loads(row['valor'])
+        except (TypeError, json.JSONDecodeError):
+            configured = defaults[row['clave']]
+        if not isinstance(configured, list):
+            configured = defaults[row['clave']]
+        settings[row['clave']] = [
+            column for column in AHORRO_BALANCE_COLUMNS
+            if column in configured and column in valid_columns
+        ]
+    conn.commit()
+    return {
+        key: settings.get(key, value)
+        for key, value in defaults.items()
+    }
+
+
+def ensure_budget_settings(conn: sqlite3.Connection) -> None:
+    ensure_app_settings(conn)
+    conn.executemany(
+        'INSERT OR IGNORE INTO app_config (clave, valor) VALUES (?, ?)',
+        (
+            (f'presupuesto:{category}', '' if amount is None else str(amount))
+            for category, amount in DEFAULT_MONTHLY_BUDGETS_CENTS.items()
+        ),
+    )
+    conn.commit()
+
+
 def get_balance_history_months(conn: sqlite3.Connection) -> int:
     ensure_app_settings(conn)
     row = conn.execute(
@@ -111,8 +162,23 @@ def get_balance_history_months(conn: sqlite3.Connection) -> int:
 
 def ensure_account_balance_flag(conn: sqlite3.Connection) -> None:
     columns = {row['name'] for row in conn.execute('PRAGMA table_info(cuentas)')}
+    changed = False
     if 'incluir_en_saldos' not in columns:
         conn.execute('ALTER TABLE cuentas ADD COLUMN incluir_en_saldos INTEGER NOT NULL DEFAULT 1')
+        changed = True
+    if 'incluir_en_resumen' not in columns:
+        conn.execute('ALTER TABLE cuentas ADD COLUMN incluir_en_resumen INTEGER NOT NULL DEFAULT 1')
+        conn.execute('UPDATE cuentas SET incluir_en_resumen = incluir_en_saldos')
+        changed = True
+    if 'saldo_por_movimientos' not in columns:
+        conn.execute(
+            'ALTER TABLE cuentas ADD COLUMN saldo_por_movimientos INTEGER NOT NULL DEFAULT 0'
+        )
+        conn.execute(
+            "UPDATE cuentas SET saldo_por_movimientos = 1 WHERE fuente = 'AMAZON' COLLATE NOCASE"
+        )
+        changed = True
+    if changed:
         conn.commit()
 
 
@@ -280,6 +346,8 @@ def save_ahorro():
 
     conn = get_db()
     try:
+        column_settings = get_savings_column_settings(conn)
+        modal_columns = set(column_settings['columnas_modal_ahorro'])
         columns = {row['name'] for row in conn.execute('PRAGMA table_info(ahorro)')}
         if not columns:
             return jsonify({'error': 'No existe la tabla ahorro'}), 500
@@ -297,6 +365,9 @@ def save_ahorro():
                     values[column] = parse_ahorro_amount(payload[column])
                 except ValueError:
                     return jsonify({'error': f'El valor de «{column}» debe ser numérico'}), 400
+        for column in AHORRO_BALANCE_COLUMNS:
+            if column not in modal_columns:
+                values[column] = 0
 
         for column in ('Considerado en grafica?', 'Comentarios'):
             if column in payload:
@@ -340,6 +411,7 @@ def save_ahorro():
 def api_config_ahorro_proyeccion():
     conn = get_db()
     try:
+        column_settings = get_savings_column_settings(conn)
         ensure_app_settings(conn)
         conn.executemany(
             'INSERT OR IGNORE INTO app_config (clave, valor) VALUES (?, ?)',
@@ -347,17 +419,19 @@ def api_config_ahorro_proyeccion():
                 ('anios_proyeccion_ahorro', '5'),
                 ('meses_media_forecast_ahorro', '12'),
                 ('fecha_inicio_evolucion_ahorro', ''),
+                ('fecha_fin_evolucion_ahorro', ''),
             ),
         )
         conn.commit()
         settings = {
             row['clave']: row['valor']
             for row in conn.execute(
-                'SELECT clave, valor FROM app_config WHERE clave IN (?, ?, ?)',
+                'SELECT clave, valor FROM app_config WHERE clave IN (?, ?, ?, ?)',
                 (
                     'anios_proyeccion_ahorro',
                     'meses_media_forecast_ahorro',
                     'fecha_inicio_evolucion_ahorro',
+                    'fecha_fin_evolucion_ahorro',
                 ),
             )
         }
@@ -375,10 +449,18 @@ def api_config_ahorro_proyeccion():
                 start_date = datetime.strptime(start_date, '%Y-%m-%d').date().isoformat()
         except (TypeError, ValueError):
             start_date = ''
+        end_date = settings['fecha_fin_evolucion_ahorro']
+        try:
+            if end_date:
+                end_date = datetime.strptime(end_date, '%Y-%m-%d').date().isoformat()
+        except (TypeError, ValueError):
+            end_date = ''
         return jsonify({
             'anios_proyeccion_ahorro': years,
             'meses_media_forecast_ahorro': months,
             'fecha_inicio_evolucion_ahorro': start_date,
+            'fecha_fin_evolucion_ahorro': end_date,
+            **column_settings,
         })
     finally:
         conn.close()
@@ -393,6 +475,10 @@ def api_update_config_ahorro_proyeccion():
         'anios_proyeccion_ahorro': (1, 50, 'años'),
         'meses_media_forecast_ahorro': (1, 120, 'meses'),
     }
+    supported_column_settings = {
+        'columnas_grafica_ahorro',
+        'columnas_modal_ahorro',
+    }
     updates = {}
     if 'fecha_inicio_evolucion_ahorro' in payload:
         start_date = str(payload['fecha_inicio_evolucion_ahorro'] or '').strip()
@@ -402,6 +488,14 @@ def api_update_config_ahorro_proyeccion():
             except ValueError:
                 return jsonify({'error': 'La fecha de inicio debe tener un formato válido'}), 400
         updates['fecha_inicio_evolucion_ahorro'] = start_date
+    if 'fecha_fin_evolucion_ahorro' in payload:
+        end_date = str(payload['fecha_fin_evolucion_ahorro'] or '').strip()
+        if end_date:
+            try:
+                end_date = datetime.strptime(end_date, '%Y-%m-%d').date().isoformat()
+            except ValueError:
+                return jsonify({'error': 'La fecha final debe tener un formato válido'}), 400
+        updates['fecha_fin_evolucion_ahorro'] = end_date
     for key, (minimum, maximum, unit) in supported_settings.items():
         if key not in payload:
             continue
@@ -414,19 +508,73 @@ def api_update_config_ahorro_proyeccion():
                 'error': f'El rango permitido es de {minimum} a {maximum} {unit}'
             }), 400
         updates[key] = value
+    for key in supported_column_settings:
+        if key not in payload:
+            continue
+        selected = payload[key]
+        if (
+            not isinstance(selected, list)
+            or any(not isinstance(column, str) for column in selected)
+            or any(column not in AHORRO_BALANCE_COLUMNS for column in selected)
+        ):
+            return jsonify({'error': f'La selección de columnas «{key}» no es válida'}), 400
+        updates[key] = [
+            column for column in AHORRO_BALANCE_COLUMNS
+            if column in selected
+        ]
     if not updates:
         return jsonify({'error': 'No hay parámetros de extrapolación para actualizar'}), 400
 
     conn = get_db()
     try:
         ensure_app_settings(conn)
+        current_dates = {
+            row['clave']: row['valor']
+            for row in conn.execute(
+                'SELECT clave, valor FROM app_config WHERE clave IN (?, ?)',
+                ('fecha_inicio_evolucion_ahorro', 'fecha_fin_evolucion_ahorro'),
+            )
+        }
+        effective_start_date = updates.get(
+            'fecha_inicio_evolucion_ahorro',
+            current_dates.get('fecha_inicio_evolucion_ahorro', ''),
+        )
+        effective_end_date = updates.get(
+            'fecha_fin_evolucion_ahorro',
+            current_dates.get('fecha_fin_evolucion_ahorro', ''),
+        )
+        if effective_start_date and effective_end_date and effective_start_date > effective_end_date:
+            return jsonify({
+                'error': 'La fecha inicial no puede ser posterior a la fecha final'
+            }), 400
+
+        serialized_updates = {
+            key: json.dumps(value, ensure_ascii=False)
+            if key in supported_column_settings else str(value)
+            for key, value in updates.items()
+        }
         conn.executemany(
             'INSERT INTO app_config (clave, valor) VALUES (?, ?) '
             'ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor',
-            [(key, str(value)) for key, value in updates.items()],
+            list(serialized_updates.items()),
         )
         conn.commit()
-        return jsonify(updates)
+        saved_dates = {
+            row['clave']: row['valor']
+            for row in conn.execute(
+                'SELECT clave, valor FROM app_config WHERE clave IN (?, ?)',
+                ('fecha_inicio_evolucion_ahorro', 'fecha_fin_evolucion_ahorro'),
+            )
+        }
+        return jsonify({
+            **{
+                key: value for key, value in updates.items()
+                if key not in supported_column_settings
+            },
+            'fecha_inicio_evolucion_ahorro': saved_dates.get('fecha_inicio_evolucion_ahorro', ''),
+            'fecha_fin_evolucion_ahorro': saved_dates.get('fecha_fin_evolucion_ahorro', ''),
+            **get_savings_column_settings(conn),
+        })
     finally:
         conn.close()
 
@@ -452,7 +600,40 @@ def api_importar_input():
             if not isinstance(selected_keys, list) or not all(isinstance(key, str) for key in selected_keys):
                 return jsonify({'error': 'La selección de importación no es válida'}), 400
             selected_keys = set(selected_keys)
-        result = import_files(selected_keys=selected_keys)
+        if 'ediciones' not in payload:
+            result = import_files(selected_keys=selected_keys)
+        else:
+            raw_edits = payload['ediciones']
+            if not isinstance(raw_edits, dict) or any(
+                not isinstance(key, str) or not isinstance(values, dict)
+                for key, values in raw_edits.items()
+            ):
+                return jsonify({'error': 'Las ediciones de importación no son válidas'}), 400
+            row_overrides = {}
+            conn = get_db()
+            try:
+                for key, values in raw_edits.items():
+                    if set(values) - {'categoria2', 'comentarios'}:
+                        return jsonify({'error': 'Las ediciones de importación contienen campos no válidos'}), 400
+                    override = {}
+                    if 'categoria2' in values:
+                        if not isinstance(values['categoria2'], str):
+                            return jsonify({'error': 'La categoría debe ser texto'}), 400
+                        try:
+                            override['categoria2'] = ensure_valid_categoria(conn, values['categoria2'])
+                        except ValueError as exc:
+                            return jsonify({'error': str(exc)}), 400
+                    if 'comentarios' in values:
+                        if not isinstance(values['comentarios'], str):
+                            return jsonify({'error': 'Los comentarios deben ser texto'}), 400
+                        override['comentarios'] = values['comentarios'].strip()
+                    row_overrides[key] = override
+            finally:
+                conn.close()
+            result = import_files(
+                selected_keys=selected_keys,
+                row_overrides=row_overrides,
+            )
         return jsonify(result), 200
     except Exception as exc:
         return jsonify({'error': str(exc), 'inserted': 0, 'skipped': 0}), 500
@@ -484,7 +665,8 @@ def api_config_cuentas():
     meses_saldo_historico = get_balance_history_months(conn)
     cuentas = conn.execute(
         '''
-        SELECT fuente, ahorro_no_disponible_cent, incluir_en_saldos
+        SELECT fuente, ahorro_no_disponible_cent, incluir_en_saldos, incluir_en_resumen,
+               saldo_por_movimientos
         FROM cuentas
         ORDER BY fuente COLLATE NOCASE ASC
         '''
@@ -493,6 +675,74 @@ def api_config_cuentas():
     return jsonify({
         'cuentas': [dict(row) for row in cuentas],
         'meses_saldo_historico': meses_saldo_historico,
+    })
+
+
+@app.get('/api/config/presupuestos')
+def api_config_presupuestos():
+    conn = get_db()
+    ensure_budget_settings(conn)
+    rows = conn.execute(
+        '''
+        SELECT c.categoria1, c.categoria2, ac.valor AS presupuesto_cent
+        FROM categorias c
+        LEFT JOIN app_config ac ON ac.clave = 'presupuesto:' || c.categoria2
+        WHERE c.categoria0 = 'Gasto'
+        ORDER BY c.categoria1 COLLATE NOCASE, c.categoria2 COLLATE NOCASE
+        '''
+    ).fetchall()
+    conn.close()
+    return jsonify({
+        'categorias': [
+            {
+                'categoria1': row['categoria1'],
+                'categoria2': row['categoria2'],
+                'presupuesto_cent': (
+                    int(row['presupuesto_cent']) if row['presupuesto_cent'] else None
+                ),
+            }
+            for row in rows
+        ],
+    })
+
+
+@app.put('/api/config/presupuestos/<path:categoria2>')
+def api_update_config_presupuesto(categoria2: str):
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict) or 'presupuesto_cent' not in payload:
+        return jsonify({'error': 'Indica el presupuesto mensual en céntimos o null para quitarlo'}), 400
+
+    raw_amount = payload['presupuesto_cent']
+    if raw_amount is None:
+        amount_cent = None
+    elif isinstance(raw_amount, int) and not isinstance(raw_amount, bool):
+        amount_cent = raw_amount
+    else:
+        return jsonify({'error': 'El presupuesto debe ser un número entero de céntimos o null'}), 400
+    if amount_cent is not None and amount_cent < 0:
+        return jsonify({'error': 'El presupuesto no puede ser negativo'}), 400
+
+    conn = get_db()
+    ensure_budget_settings(conn)
+    category = conn.execute(
+        "SELECT categoria2 FROM categorias WHERE categoria2 = ? AND categoria0 = 'Gasto'",
+        (categoria2,),
+    ).fetchone()
+    if category is None:
+        conn.close()
+        return jsonify({'error': 'Categoría de gasto no encontrada'}), 404
+
+    stored_value = '' if amount_cent is None else str(amount_cent)
+    conn.execute(
+        'INSERT INTO app_config (clave, valor) VALUES (?, ?) '
+        'ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor',
+        (f'presupuesto:{category["categoria2"]}', stored_value),
+    )
+    conn.commit()
+    conn.close()
+    return jsonify({
+        'categoria2': category['categoria2'],
+        'presupuesto_cent': amount_cent,
     })
 
 
@@ -519,8 +769,16 @@ def api_update_saldo_historico():
 
 @app.put('/api/config/cuentas/<path:fuente>')
 def api_update_config_cuenta(fuente: str):
-    payload = request.get_json(silent=True) or {}
-    if 'ahorro_no_disponible_cent' not in payload and 'incluir_en_saldos' not in payload:
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'El cuerpo de la solicitud no es válido'}), 400
+    allowed_fields = {
+        'ahorro_no_disponible_cent',
+        'incluir_en_saldos',
+        'incluir_en_resumen',
+        'saldo_por_movimientos',
+    }
+    if not allowed_fields.intersection(payload):
         return jsonify({'error': 'No hay parámetros de cuenta para actualizar'}), 400
 
     updates = {}
@@ -532,8 +790,11 @@ def api_update_config_cuenta(fuente: str):
         if amount_cent < 0:
             return jsonify({'error': 'El importe no puede ser negativo'}), 400
         updates['ahorro_no_disponible_cent'] = amount_cent
-    if 'incluir_en_saldos' in payload:
-        updates['incluir_en_saldos'] = 1 if payload['incluir_en_saldos'] else 0
+    for field in ('incluir_en_saldos', 'incluir_en_resumen', 'saldo_por_movimientos'):
+        if field in payload:
+            if not isinstance(payload[field], bool):
+                return jsonify({'error': f'{field} debe ser un valor booleano'}), 400
+            updates[field] = int(payload[field])
 
     conn = get_db()
     ensure_account_balance_flag(conn)
@@ -548,7 +809,11 @@ def api_update_config_cuenta(fuente: str):
 
     conn.commit()
     row = conn.execute(
-        'SELECT fuente, ahorro_no_disponible_cent, incluir_en_saldos FROM cuentas WHERE fuente = ?',
+        '''
+        SELECT fuente, ahorro_no_disponible_cent, incluir_en_saldos, incluir_en_resumen,
+               saldo_por_movimientos
+        FROM cuentas WHERE fuente = ?
+        ''',
         (fuente,),
     ).fetchone()
     conn.close()
@@ -582,6 +847,7 @@ def api_presupuestos():
         month = datetime.now().strftime('%Y-%m')
 
     conn = get_db()
+    ensure_budget_settings(conn)
     rows = conn.execute(
         '''
         SELECT c.categoria1, c.categoria2,
@@ -596,6 +862,12 @@ def api_presupuestos():
         ''',
         (month,),
     ).fetchall()
+    budget_values = {
+        row['clave'][len('presupuesto:'):]: row['valor']
+        for row in conn.execute(
+            "SELECT clave, valor FROM app_config WHERE clave LIKE 'presupuesto:%'"
+        ).fetchall()
+    }
     conn.close()
 
     groups = {}
@@ -604,8 +876,11 @@ def api_presupuestos():
     for row in rows:
         category1 = row['categoria1'] or '(sin categoría)'
         category2 = row['categoria2'] or '(sin categoría)'
-        budget_cent = MONTHLY_BUDGETS_CENTS.get(category2)
+        budget_value = budget_values.get(category2, '')
+        budget_cent = int(budget_value) if budget_value else None
         actual_cent = -int(row['importe_cent'] or 0)
+        if budget_cent is None and actual_cent == 0:
+            continue
         group = groups.setdefault(category1, {
             'categoria1': category1,
             'budget_cent': None,
@@ -734,8 +1009,8 @@ def api_dashboard():
         totals_by_category[level] = [dict(row) for row in rows]
 
     cuentas_query = '''
-        SELECT fuente, disponible_cero, ahorro_no_disponible_cent
-        FROM cuentas WHERE incluir_en_saldos = 1
+        SELECT fuente, disponible_cero, ahorro_no_disponible_cent, saldo_por_movimientos
+        FROM cuentas WHERE incluir_en_resumen = 1
     '''
     if sin_fuentes:
         cuentas = []
@@ -749,52 +1024,77 @@ def api_dashboard():
         cuentas = conn.execute(f'{cuentas_query} ORDER BY fuente COLLATE NOCASE ASC').fetchall()
 
     total_general = 0
+    total_general_con_excluido = 0
+    totals_by_source = []
     for cuenta in cuentas:
         fuente = cuenta['fuente']
         if cuenta['disponible_cero']:
+            totals_by_source.append({
+                'fuente': fuente,
+                'total_cent': 0,
+                'total_con_excluido_cent': 0,
+            })
             continue
 
-        snapshot_sql = '''
-            SELECT id, COALESCE(f_valor, fecha) AS fecha_snapshot, disponible_cent
-            FROM movimientos
-            WHERE fuente = ? AND disponible_cent IS NOT NULL
-        '''
-        snapshot_params = [fuente]
-        if date_end:
-            snapshot_sql += ' AND date(COALESCE(f_valor, fecha)) <= date(?)'
-            snapshot_params.append(date_end)
-        snapshot_sql += ' ORDER BY datetime(COALESCE(f_valor, fecha)) DESC, id ASC LIMIT 1'
-        snapshot = conn.execute(snapshot_sql, snapshot_params).fetchone()
-
-        if snapshot is not None:
+        excluded_balance_cent = int(cuenta['ahorro_no_disponible_cent'] or 0)
+        if cuenta['saldo_por_movimientos']:
             movements_sql = '''
                 SELECT COALESCE(SUM(importe_cent), 0)
                 FROM movimientos
-                WHERE fuente = ? AND datetime(COALESCE(f_valor, fecha)) > datetime(?)
+                WHERE fuente = ?
             '''
-            movements_params = [fuente, snapshot['fecha_snapshot']]
-            if date_end:
-                movements_sql += ' AND date(COALESCE(f_valor, fecha)) <= date(?)'
-                movements_params.append(date_end)
-            later_movements_cent = conn.execute(movements_sql, movements_params).fetchone()[0]
-            balance_cent = max(
-                int(snapshot['disponible_cent'])
-                - int(cuenta['ahorro_no_disponible_cent'] or 0)
-                + int(later_movements_cent or 0),
-                0,
-            )
-        else:
-            movements_sql = 'SELECT COALESCE(SUM(importe_cent), 0) FROM movimientos WHERE fuente = ?'
             movements_params = [fuente]
             if date_end:
                 movements_sql += ' AND date(COALESCE(f_valor, fecha)) <= date(?)'
                 movements_params.append(date_end)
-            movement_total_cent = conn.execute(movements_sql, movements_params).fetchone()[0]
-            balance_cent = max(
-                int(movement_total_cent or 0) - int(cuenta['ahorro_no_disponible_cent'] or 0),
+            balance_con_excluido_cent = max(
+                int(conn.execute(movements_sql, movements_params).fetchone()[0] or 0),
                 0,
             )
+        else:
+            snapshot_sql = '''
+                SELECT id, COALESCE(f_valor, fecha) AS fecha_snapshot, disponible_cent
+                FROM movimientos
+                WHERE fuente = ? AND disponible_cent IS NOT NULL
+            '''
+            movements_params = [fuente]
+            if date_end:
+                snapshot_sql += ' AND date(COALESCE(f_valor, fecha)) <= date(?)'
+                movements_params.append(date_end)
+            snapshot_sql += ' ORDER BY datetime(COALESCE(f_valor, fecha)) DESC, id ASC LIMIT 1'
+            snapshot = conn.execute(snapshot_sql, movements_params).fetchone()
+
+            if snapshot is not None:
+                movements_sql = '''
+                    SELECT COALESCE(SUM(importe_cent), 0)
+                    FROM movimientos
+                    WHERE fuente = ? AND datetime(COALESCE(f_valor, fecha)) > datetime(?)
+                '''
+                movements_params = [fuente, snapshot['fecha_snapshot']]
+                if date_end:
+                    movements_sql += ' AND date(COALESCE(f_valor, fecha)) <= date(?)'
+                    movements_params.append(date_end)
+                later_movements_cent = conn.execute(movements_sql, movements_params).fetchone()[0]
+                balance_con_excluido_cent = max(
+                    int(snapshot['disponible_cent']) + int(later_movements_cent or 0),
+                    0,
+                )
+            else:
+                movements_sql = 'SELECT COALESCE(SUM(importe_cent), 0) FROM movimientos WHERE fuente = ?'
+                movements_params = [fuente]
+                if date_end:
+                    movements_sql += ' AND date(COALESCE(f_valor, fecha)) <= date(?)'
+                    movements_params.append(date_end)
+                movement_total_cent = conn.execute(movements_sql, movements_params).fetchone()[0]
+                balance_con_excluido_cent = max(int(movement_total_cent or 0), 0)
+        balance_cent = max(balance_con_excluido_cent - excluded_balance_cent, 0)
         total_general += balance_cent
+        total_general_con_excluido += balance_con_excluido_cent
+        totals_by_source.append({
+            'fuente': fuente,
+            'total_cent': balance_cent,
+            'total_con_excluido_cent': balance_con_excluido_cent,
+        })
 
     fuentes = [
         row['fuente']
@@ -813,6 +1113,8 @@ def api_dashboard():
         'date_max': date_max,
         'categorias_seleccionadas': selected_categories,
         'total_general': total_general,
+        'total_general_con_excluido': total_general_con_excluido,
+        'totales_por_fuente': totals_by_source,
         'totales_por_categoria0': totals_by_category['categoria0'],
         'totales_por_categoria1': totals_by_category['categoria1'],
         'totales_por_categoria2': totals_by_category['categoria2'],
@@ -1135,7 +1437,7 @@ def api_dashboard_saldos():
         placeholders = ', '.join('?' for _ in fuentes_seleccionadas)
         accounts = conn.execute(
             f'''
-            SELECT fuente, disponible_cero, ahorro_no_disponible_cent
+            SELECT fuente, disponible_cero, ahorro_no_disponible_cent, saldo_por_movimientos
             FROM cuentas WHERE fuente IN ({placeholders}) AND incluir_en_saldos = 1
             ORDER BY fuente COLLATE NOCASE ASC
             ''',
@@ -1143,12 +1445,20 @@ def api_dashboard_saldos():
         ).fetchall()
     else:
         accounts = conn.execute(
-            'SELECT fuente, disponible_cero, ahorro_no_disponible_cent FROM cuentas WHERE incluir_en_saldos = 1 ORDER BY fuente COLLATE NOCASE ASC'
+            '''
+            SELECT fuente, disponible_cero, ahorro_no_disponible_cent, saldo_por_movimientos
+            FROM cuentas WHERE incluir_en_saldos = 1
+            ORDER BY fuente COLLATE NOCASE ASC
+            '''
         ).fetchall()
 
     account_balances = {}
     for account in accounts:
         fuente = account['fuente']
+        is_movement_account = (
+            fuente.strip().casefold() == 'efectivo'
+            or account['saldo_por_movimientos']
+        )
         excluded_cent = int(account['ahorro_no_disponible_cent'] or 0)
         if account['disponible_cero']:
             account_balances[fuente] = {
@@ -1157,50 +1467,62 @@ def api_dashboard_saldos():
             }
             continue
 
-        baseline = conn.execute(
-            '''
-            SELECT datetime(COALESCE(f_valor, fecha)) AS instante, disponible_cent
-            FROM movimientos
-            WHERE fuente = ? AND disponible_cent IS NOT NULL
-              AND date(COALESCE(f_valor, fecha)) < ?
-            ORDER BY datetime(COALESCE(f_valor, fecha)) DESC, id DESC
-            LIMIT 1
-            ''',
-            (fuente, history_start.isoformat()),
-        ).fetchone()
-
-        if baseline is None:
-            balance = None
+        if is_movement_account:
+            balance = 0
             events = conn.execute(
                 '''
                 SELECT date(COALESCE(f_valor, fecha)) AS dia, importe_cent, disponible_cent
                 FROM movimientos
-                WHERE fuente = ?
-                  AND date(COALESCE(f_valor, fecha)) >= ?
-                  AND date(COALESCE(f_valor, fecha)) <= ?
+                WHERE fuente = ? AND date(COALESCE(f_valor, fecha)) <= ?
                 ORDER BY datetime(COALESCE(f_valor, fecha)), id
                 ''',
-                (fuente, history_start.isoformat(), selected_month_end.isoformat()),
+                (fuente, selected_month_end.isoformat()),
             ).fetchall()
         else:
-            balance = int(baseline['disponible_cent'])
-            events = conn.execute(
+            baseline = conn.execute(
                 '''
-                SELECT date(COALESCE(f_valor, fecha)) AS dia, importe_cent, disponible_cent
+                SELECT datetime(COALESCE(f_valor, fecha)) AS instante, disponible_cent
                 FROM movimientos
-                WHERE fuente = ?
-                  AND datetime(COALESCE(f_valor, fecha)) > datetime(?)
-                  AND date(COALESCE(f_valor, fecha)) <= ?
-                ORDER BY datetime(COALESCE(f_valor, fecha)), id
+                WHERE fuente = ? AND disponible_cent IS NOT NULL
+                  AND date(COALESCE(f_valor, fecha)) < ?
+                ORDER BY datetime(COALESCE(f_valor, fecha)) DESC, id DESC
+                LIMIT 1
                 ''',
-                (fuente, baseline['instante'], selected_month_end.isoformat()),
-            ).fetchall()
+                (fuente, history_start.isoformat()),
+            ).fetchone()
+
+            if baseline is None:
+                balance = None
+                events = conn.execute(
+                    '''
+                    SELECT date(COALESCE(f_valor, fecha)) AS dia, importe_cent, disponible_cent
+                    FROM movimientos
+                    WHERE fuente = ?
+                      AND date(COALESCE(f_valor, fecha)) >= ?
+                      AND date(COALESCE(f_valor, fecha)) <= ?
+                    ORDER BY datetime(COALESCE(f_valor, fecha)), id
+                    ''',
+                    (fuente, history_start.isoformat(), selected_month_end.isoformat()),
+                ).fetchall()
+            else:
+                balance = int(baseline['disponible_cent'])
+                events = conn.execute(
+                    '''
+                    SELECT date(COALESCE(f_valor, fecha)) AS dia, importe_cent, disponible_cent
+                    FROM movimientos
+                    WHERE fuente = ?
+                      AND datetime(COALESCE(f_valor, fecha)) > datetime(?)
+                      AND date(COALESCE(f_valor, fecha)) <= ?
+                    ORDER BY datetime(COALESCE(f_valor, fecha)), id
+                    ''',
+                    (fuente, baseline['instante'], selected_month_end.isoformat()),
+                ).fetchall()
 
         events_by_day = {}
         for event in events:
             event_day = date.fromisoformat(event['dia'])
             if event_day < history_start:
-                if event['disponible_cent'] is not None:
+                if not is_movement_account and event['disponible_cent'] is not None:
                     balance = int(event['disponible_cent'])
                 elif balance is not None:
                     balance += int(event['importe_cent'] or 0)
@@ -1211,7 +1533,7 @@ def api_dashboard_saldos():
         for offset in range((selected_month_end - history_start).days + 1):
             day = history_start + timedelta(days=offset)
             for event in events_by_day.get(day, []):
-                if event['disponible_cent'] is not None:
+                if not is_movement_account and event['disponible_cent'] is not None:
                     balance = int(event['disponible_cent'])
                 elif balance is not None:
                     balance += int(event['importe_cent'] or 0)
@@ -1290,6 +1612,7 @@ def api_dashboard_saldos():
     previous_month_end = selected_month - timedelta(days=1)
     return jsonify({
         'month': selected_month.strftime('%Y-%m'),
+        'fuentes_consideradas': [account['fuente'] for account in accounts],
         'available_months': available_months,
         'months_history': months,
         'history_start': history_start.isoformat(),
@@ -1311,16 +1634,20 @@ def build_movimientos_query_params():
     categoria = request.args.get('categoria', '').strip()
     date_start = request.args.get('date_start', '').strip()
     date_end = request.args.get('date_end', '').strip()
+    amount_min = request.args.get('importe_min_cent', '').strip()
+    amount_max = request.args.get('importe_max_cent', '').strip()
 
     where_clauses = []
     params = []
 
     if q:
         search_cols = [
-            'fuente', 'concepto', 'movimiento', 'observaciones', 'categoria2',
-            'comentarios', 'comentarios2', 'clave', 'key_legacy'
+            'id', 'fuente', 'f_valor', 'fecha', 'concepto', 'movimiento',
+            'importe_cent', 'divisa', 'disponible_cent', 'divisa2',
+            'observaciones', 'categoria2', 'comentarios', 'comentarios2',
+            'key_legacy', 'clave',
         ]
-        search_clause = ' OR '.join(f'{col} LIKE ?' for col in search_cols)
+        search_clause = ' OR '.join(f'CAST({col} AS TEXT) LIKE ?' for col in search_cols)
         where_clauses.append(f'({search_clause})')
         params.extend([f'%{q}%'] * len(search_cols))
 
@@ -1340,10 +1667,64 @@ def build_movimientos_query_params():
         where_clauses.append('date(COALESCE(f_valor, fecha)) <= date(?)')
         params.append(date_end)
 
+    try:
+        amount_min_cent = int(amount_min) if amount_min else None
+        amount_max_cent = int(amount_max) if amount_max else None
+    except ValueError as exc:
+        raise ValueError('El importe debe indicarse en céntimos enteros') from exc
+
+    if amount_min_cent is not None and amount_max_cent is None:
+        where_clauses.append('importe_cent = ?')
+        params.append(amount_min_cent)
+    else:
+        if amount_min_cent is not None:
+            where_clauses.append('importe_cent >= ?')
+            params.append(amount_min_cent)
+        if amount_max_cent is not None:
+            where_clauses.append('importe_cent <= ?')
+            params.append(amount_max_cent)
+    if (
+        amount_min_cent is not None
+        and amount_max_cent is not None
+        and amount_min_cent > amount_max_cent
+    ):
+        raise ValueError('El importe mínimo no puede superar al máximo')
+
     sql_where = ''
     if where_clauses:
         sql_where = ' WHERE ' + ' AND '.join(where_clauses)
     return sql_where, params
+
+
+def get_movimientos_order_by() -> str:
+    sort_columns = {
+        'id': 'id',
+        'fuente': 'fuente',
+        'f_valor': 'COALESCE(f_valor, fecha)',
+        'concepto': 'concepto',
+        'movimiento': 'movimiento',
+        'importe_cent': 'importe_cent',
+        'disponible_calculado_cent': '''
+            CASE
+              WHEN movimientos.disponible_cent IS NULL THEN NULL
+              WHEN COALESCE((SELECT disponible_cero FROM cuentas WHERE cuentas.fuente = movimientos.fuente), 0) = 1 THEN 0
+              ELSE MAX(movimientos.disponible_cent - COALESCE((SELECT ahorro_no_disponible_cent FROM cuentas WHERE cuentas.fuente = movimientos.fuente), 0), 0)
+            END
+        ''',
+        'categoria2': 'categoria2',
+        'comentarios': 'comentarios',
+    }
+    sort_by = request.args.get('sort_by', 'f_valor').strip()
+    sort_direction = request.args.get('sort_dir', 'desc').strip().lower()
+    if sort_by not in sort_columns:
+        raise ValueError('La columna de ordenación no es válida')
+    if sort_direction not in {'asc', 'desc'}:
+        raise ValueError('El sentido de ordenación no es válido')
+    direction = sort_direction.upper()
+    order_by = f'{sort_columns[sort_by]} {direction}'
+    if sort_by != 'id':
+        order_by += ', id DESC'
+    return order_by
 
 
 @app.get('/api/movimientos')
@@ -1351,7 +1732,11 @@ def api_movimientos():
     include_all = request.args.get('all') == '1'
     page = max(1, int(request.args.get('page', 1)))
     limit = max(1, min(200, int(request.args.get('limit', 50))))
-    sql_where, params = build_movimientos_query_params()
+    try:
+        sql_where, params = build_movimientos_query_params()
+        order_by = get_movimientos_order_by()
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
 
     conn = get_db()
     total = conn.execute(
@@ -1369,7 +1754,7 @@ def api_movimientos():
                  ELSE MAX(disponible_cent - COALESCE((SELECT ahorro_no_disponible_cent FROM cuentas WHERE cuentas.fuente = movimientos.fuente), 0), 0)
                END AS disponible_calculado_cent
         FROM movimientos{sql_where}
-        ORDER BY f_valor DESC, id DESC
+        ORDER BY {order_by}
         '''
     if include_all:
         rows = conn.execute(rows_sql, params).fetchall()
@@ -1391,7 +1776,11 @@ def api_movimientos():
 
 @app.get('/api/movimientos/export')
 def export_movimientos():
-    sql_where, params = build_movimientos_query_params()
+    try:
+        sql_where, params = build_movimientos_query_params()
+        order_by = get_movimientos_order_by()
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     conn = get_db()
     rows = conn.execute(
         f'''
@@ -1399,7 +1788,7 @@ def export_movimientos():
                divisa, disponible_cent, divisa2, observaciones, categoria2,
                comentarios, comentarios2, key_legacy, clave
         FROM movimientos{sql_where}
-        ORDER BY f_valor DESC, id DESC
+        ORDER BY {order_by}
         ''',
         params,
     ).fetchall()

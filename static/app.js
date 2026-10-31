@@ -5,6 +5,10 @@ const state = {
   categoria: '',
   dateStart: '',
   dateEnd: '',
+  amountMin: '',
+  amountMax: '',
+  sortBy: 'f_valor',
+  sortDir: 'desc',
 };
 const movimientosPageSize = 100;
 let movimientosPage = 0;
@@ -29,6 +33,8 @@ const movimientosCountEl = document.getElementById('movimientosCount');
 const newMovementBtn = document.getElementById('newMovement');
 const dateStartFilter = document.getElementById('dateStartFilter');
 const dateEndFilter = document.getElementById('dateEndFilter');
+const amountMinFilter = document.getElementById('amountMinFilter');
+const amountMaxFilter = document.getElementById('amountMaxFilter');
 const exportExcelBtn = document.getElementById('exportExcel');
 const modal = document.getElementById('editModal');
 const editForm = document.getElementById('editForm');
@@ -46,6 +52,11 @@ const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
 const importPreviewModal = document.getElementById('importPreviewModal');
 const importPreviewSummary = document.getElementById('importPreviewSummary');
 const importPreviewRows = document.getElementById('importPreviewRows');
+const importRowEditModal = document.getElementById('importRowEditModal');
+const importRowEditForm = document.getElementById('importRowEditForm');
+const importRowCategory = document.getElementById('importRowCategory');
+const importRowComments = document.getElementById('importRowComments');
+const importRowEditError = document.getElementById('importRowEditError');
 const confirmImportBtn = document.getElementById('confirmImportBtn');
 const tabMovimientos = document.getElementById('tabMovimientos');
 const tabDashboard = document.getElementById('tabDashboard');
@@ -63,6 +74,8 @@ const budgetsView = document.getElementById('budgetsView');
 const savingsView = document.getElementById('savingsView');
 const accountConfigBody = document.getElementById('accountConfigBody');
 const accountConfigStatus = document.getElementById('accountConfigStatus');
+const budgetConfigBody = document.getElementById('budgetConfigBody');
+const budgetConfigStatus = document.getElementById('budgetConfigStatus');
 const balanceHistoryMonthsInput = document.getElementById('balanceHistoryMonths');
 const balanceHistoryConfigStatus = document.getElementById('balanceHistoryConfigStatus');
 const budgetMonth = document.getElementById('budgetMonth');
@@ -73,6 +86,8 @@ const budgetActualHeader = document.getElementById('budgetActualHeader');
 const budgetMovementCache = new Map();
 const savingsRows = document.getElementById('savingsRows');
 const savingsChartCanvas = document.getElementById('savingsChart');
+const savingsColumnsChartCanvas = document.getElementById('savingsColumnsChart');
+const savingsColumnToggles = document.getElementById('savingsColumnToggles');
 const savingsStatus = document.getElementById('savingsStatus');
 const savingsModal = document.getElementById('savingsModal');
 const savingsForm = document.getElementById('savingsForm');
@@ -80,7 +95,12 @@ const savingsModalTitle = document.getElementById('savingsModalTitle');
 const savingsProjectionYearsInput = document.getElementById('savingsProjectionYears');
 const savingsForecastMonthsInput = document.getElementById('savingsForecastMonths');
 const savingsStartDateInput = document.getElementById('savingsStartDate');
+const savingsEndDateInput = document.getElementById('savingsEndDate');
+const savingsDateRangeStatus = document.getElementById('savingsDateRangeStatus');
 const savingsProjectionConfigStatus = document.getElementById('savingsProjectionConfigStatus');
+const savingsChartColumnsConfig = document.getElementById('savingsChartColumnsConfig');
+const savingsModalColumnsConfig = document.getElementById('savingsModalColumnsConfig');
+const savingsColumnsConfigStatus = document.getElementById('savingsColumnsConfigStatus');
 const importSummaryBadge = document.getElementById('importSummaryBadge');
 const importStatusText = document.getElementById('importStatusText');
 const importTabRows = document.getElementById('importTabRows');
@@ -90,15 +110,17 @@ const importSelectAll = document.getElementById('importSelectAll');
 const confirmImportTabBtn = document.getElementById('confirmImportTabBtn');
 const dashboardBankButtons = document.getElementById('dashboardBankButtons');
 const dashboardTotal = document.getElementById('dashboardTotal');
+const dashboardTotalIncludingExcluded = document.getElementById('dashboardTotalIncludingExcluded');
+const dashboardBankTotals = document.getElementById('dashboardBankTotals');
 const balanceHistoryChart = document.getElementById('balanceHistoryChart');
 const balanceChartWrap = document.getElementById('balanceChartWrap');
 const balanceChartTooltip = document.getElementById('balanceChartTooltip');
 const balanceChartSummary = document.getElementById('balanceChartSummary');
+const balanceBanksSummary = document.getElementById('balanceBanksSummary');
 const balanceChartLegend = document.getElementById('balanceChartLegend');
 const balanceHistoryRows = document.getElementById('balanceHistoryRows');
 const balanceMonthSelect = document.getElementById('balanceMonthSelect');
 const dashboardCategoryVisuals = document.getElementById('dashboardVisuals');
-const clearDashboardCategoryFilter = document.getElementById('clearDashboardCategoryFilter');
 const dashboardCategoryLevels = ['categoria0', 'categoria1', 'categoria2'];
 const dashboardCategoryViews = {
   categoria0: {
@@ -141,11 +163,30 @@ let activeViewName = 'dashboard';
 let currentImportRows = [];
 let currentImportFilesCount = 0;
 let selectedImportKeys = new Set();
+let pendingImportOverrides = new Map();
+let editingImportKey = null;
 let savingsChartInstance = null;
+let savingsColumnsChartInstance = null;
 let savingsRecords = [];
 let savedSavingsProjectionYears = '5';
 let savedSavingsForecastMonths = '12';
 let savedSavingsStartDate = '';
+let savedSavingsEndDate = '';
+const savingsBalanceFields = [
+  'Ahorro BBVA',
+  'Ahorro Bankinter',
+  'Ahorro N26',
+  'Ahorro Trade Republic',
+  'Ahorro Revolut',
+  'Ahorro PIBANK',
+  'Trade Wallet',
+  'Kraken Wallet',
+  'Ahorro Acciones',
+  'UBS Acciones',
+  'PPI BBVA',
+];
+let savedSavingsChartColumns = [...savingsBalanceFields];
+let savedSavingsModalColumns = [...savingsBalanceFields];
 const tableSortStates = new WeakMap();
 let dashboardRange = {
   min: null,
@@ -219,10 +260,16 @@ function setTableSort(table, columnIndex, direction, bodies = [...table.tBodies]
 function initializeTableSort(table, bodies = [...table.tBodies]) {
   const headers = [...(table.tHead?.rows[0]?.cells || [])];
   headers.forEach((header) => {
+    if (table.classList.contains('movimientos-table') && !header.dataset.sortKey) return;
     header.tabIndex = 0;
     header.classList.add('sortable-header');
     header.setAttribute('aria-sort', 'none');
   });
+  if (table.classList.contains('movimientos-table')) {
+    const defaultHeader = headers.find((header) => header.dataset.sortKey === state.sortBy);
+    if (defaultHeader) defaultHeader.setAttribute('aria-sort', 'descending');
+    return;
+  }
   const defaultColumn = headers.findIndex((header) => /^\s*(fecha|mes|día|dia)(?:\s|$)/i.test(header.textContent));
   if (defaultColumn >= 0) setTableSort(table, defaultColumn, -1, bodies);
   else tableSortStates.delete(table);
@@ -242,6 +289,15 @@ function initializeSortableTables() {
     const header = event.target.closest('th.sortable-header');
     if (!header || event.target.closest('input, button, a')) return;
     const table = header.closest('table');
+    if (table?.classList.contains('movimientos-table')) {
+      const sortBy = header.dataset.sortKey;
+      if (!sortBy) return;
+      state.sortDir = state.sortBy === sortBy && state.sortDir === 'asc' ? 'desc' : 'asc';
+      state.sortBy = sortBy;
+      updateMovimientosSortIndicators(table);
+      loadMovimientos();
+      return;
+    }
     const columnIndex = header.cellIndex;
     const currentSort = tableSortStates.get(table);
     const direction = currentSort?.columnIndex === columnIndex
@@ -256,6 +312,14 @@ function initializeSortableTables() {
     if (!header || event.target.closest('input, button, a')) return;
     event.preventDefault();
     header.click();
+  });
+}
+
+function updateMovimientosSortIndicators(table = tableBody.closest('table')) {
+  [...table.tHead.rows[0].cells].forEach((header) => {
+    header.setAttribute('aria-sort', header.dataset.sortKey === state.sortBy
+      ? state.sortDir === 'asc' ? 'ascending' : 'descending'
+      : 'none');
   });
 }
 
@@ -383,6 +447,15 @@ function setRangeShortcutState() {
     const isActive = button.dataset.range === activeRangePreset;
     button.classList.toggle('active', isActive);
   });
+}
+
+function resetDashboardDateRange() {
+  activeRangePreset = 'all';
+  setRangeShortcutState();
+  if (!dashboardRange.min || !dashboardRange.max) return;
+  dateStartSlider.value = '0';
+  dateEndSlider.value = String(Math.max(1, daysBetween(dashboardRange.min, dashboardRange.max)));
+  syncDashboardDateInputs();
 }
 
 function applyRangePreset(preset) {
@@ -546,9 +619,46 @@ function renderDashboardCategory(level, rows) {
 
 function renderDashboard(data) {
   dashboardTotal.textContent = formatMoneyFromCents(data.total_general || 0);
+  dashboardTotalIncludingExcluded.textContent = formatMoneyFromCents(
+    data.total_general_con_excluido || 0,
+  );
+  dashboardBankTotals.replaceChildren();
+  const bankTotals = data.totales_por_fuente || [];
+  if (bankTotals.length) {
+    const header = document.createElement('div');
+    header.className = 'dashboard-bank-total dashboard-bank-total-header';
+    const bankHeading = document.createElement('span');
+    bankHeading.textContent = 'Banco';
+    const availableHeading = document.createElement('span');
+    availableHeading.textContent = 'Disponible';
+    const includingExcludedHeading = document.createElement('span');
+    includingExcludedHeading.textContent = 'Con excluido';
+    header.append(bankHeading, availableHeading, includingExcludedHeading);
+    dashboardBankTotals.appendChild(header);
+  }
+  bankTotals.forEach((bankTotal) => {
+    const row = document.createElement('div');
+    row.className = 'dashboard-bank-total';
+    const bank = document.createElement('span');
+    bank.textContent = bankTotal.fuente;
+    const availableAmount = document.createElement('strong');
+    availableAmount.textContent = formatMoneyFromCents(bankTotal.total_cent);
+    const amountIncludingExcluded = document.createElement('strong');
+    amountIncludingExcluded.textContent = formatMoneyFromCents(
+      bankTotal.total_con_excluido_cent,
+    );
+    row.append(bank, availableAmount, amountIncludingExcluded);
+    dashboardBankTotals.appendChild(row);
+  });
+  if (!bankTotals.length) {
+    const empty = document.createElement('span');
+    empty.className = 'muted';
+    empty.textContent = 'Sin bancos seleccionados';
+    dashboardBankTotals.appendChild(empty);
+  }
   updateDashboardDateRange(data);
-  clearDashboardCategoryFilter.disabled = !dashboardCategoryLevels.some((level) => selectedDashboardCategories[level]);
   dashboardCategoryLevels.forEach((level) => {
+    dashboardCategoryVisuals.querySelector(`[data-clear-category-level="${level}"]`).disabled = !selectedDashboardCategories[level];
     renderDashboardCategory(level, data[`totales_por_${level}`] || []);
   });
 }
@@ -612,6 +722,10 @@ function formatBalanceChartValue(value) {
 
 function renderBalanceChart(data) {
   const svg = balanceHistoryChart;
+  const balanceSources = data.fuentes_consideradas || [];
+  balanceBanksSummary.textContent = balanceSources.length
+    ? `Bancos considerados: ${balanceSources.join(', ')}`
+    : 'Bancos considerados: ninguno';
   const width = 1100;
   const height = 340;
   const margin = { top: 20, right: 18, bottom: 42, left: 78 };
@@ -798,6 +912,13 @@ function renderBalanceChart(data) {
 }
 
 dashboardCategoryVisuals.addEventListener('click', (event) => {
+  const clearButton = event.target.closest('.dashboard-category-clear');
+  if (clearButton) {
+    selectedDashboardCategories[clearButton.dataset.clearCategoryLevel] = null;
+    loadDashboard();
+    return;
+  }
+
   const button = event.target.closest('.dashboard-category-select');
   if (!button) return;
   const { categoryLevel, categoryValue } = button.dataset;
@@ -807,18 +928,11 @@ dashboardCategoryVisuals.addEventListener('click', (event) => {
   loadDashboard();
 });
 
-clearDashboardCategoryFilter.addEventListener('click', () => {
-  dashboardCategoryLevels.forEach((level) => {
-    selectedDashboardCategories[level] = null;
-  });
-  loadDashboard();
-});
-
 function renderImportPreviewRows(rows, filesCount = 0, targetBody = importPreviewRows, summaryEl = importPreviewSummary, countEl = importSummaryBadge) {
   if (!targetBody) return;
   const isImportTab = targetBody === importTabRows;
   const filteredRows = isImportTab ? filterImportPreviewRows(rows) : rows;
-  const columnsCount = isImportTab ? 8 : 6;
+  const columnsCount = isImportTab ? 10 : 9;
 
   if (!filteredRows.length) {
     const hasNoFilterMatches = rows.length > 0;
@@ -856,22 +970,72 @@ function renderImportPreviewRows(rows, filesCount = 0, targetBody = importPrevie
     countEl.textContent = `${selectedImportKeys.size} seleccionados`;
   }
 
-  targetBody.innerHTML = filteredRows
-    .map(
-      (row, index) => `
-        <tr>
-          ${isImportTab ? `<td class="selection-cell"><input class="import-row-checkbox" type="checkbox" data-import-key="${row.clave}" aria-label="Seleccionar ${row.concepto || row.fuente || 'registro'}" ${selectedImportKeys.has(row.clave) ? 'checked' : ''} /></td>` : ''}
-          <td>${row.fuente || '—'}</td>
-          <td>${row.update_snapshot ? 'Actualizar saldo · ' : ''}${row.source_file || row.fuente || 'input'}</td>
-          <td>${formatShortDate(row.f_valor || row.fecha)}</td>
-          <td>${row.concepto || '—'}</td>
-          <td>${row.movimiento || '—'}</td>
-          <td class="money-cell">${formatMoneyFromCents(row.importe_cent || 0)}</td>
-          ${isImportTab ? `<td><div class="row-actions"><button class="action-btn edit-btn" type="button" data-import-row-index="${index}" title="Editar fila">✎</button></div></td>` : ''}
-        </tr>
-      `
-    )
-    .join('');
+  const fragment = document.createDocumentFragment();
+  filteredRows.forEach((row) => {
+    const tableRow = document.createElement('tr');
+    if (isImportTab) {
+      const selectionCell = document.createElement('td');
+      selectionCell.className = 'selection-cell';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'import-row-checkbox';
+      checkbox.dataset.importKey = row.clave;
+      checkbox.checked = selectedImportKeys.has(row.clave);
+      checkbox.setAttribute(
+        'aria-label',
+        `Seleccionar ${row.concepto || row.fuente || 'registro'}`,
+      );
+      selectionCell.appendChild(checkbox);
+      tableRow.appendChild(selectionCell);
+    }
+
+    const values = [
+      row.fuente || '—',
+      `${row.update_snapshot ? 'Actualizar saldo · ' : ''}${row.source_file || row.fuente || 'input'}`,
+      formatShortDate(row.f_valor || row.fecha),
+      row.concepto || '—',
+      row.movimiento || '—',
+    ];
+    values.forEach((value) => {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      tableRow.appendChild(cell);
+    });
+    const amountCell = document.createElement('td');
+    amountCell.className = 'money-cell';
+    amountCell.textContent = formatMoneyFromCents(row.importe_cent || 0);
+    tableRow.appendChild(amountCell);
+
+    const categoryCell = document.createElement('td');
+    const categoryButton = document.createElement('button');
+    categoryButton.className = 'badge import-category-edit';
+    categoryButton.type = 'button';
+    categoryButton.dataset.importKey = row.clave;
+    categoryButton.title = 'Cambiar categoría';
+    categoryButton.setAttribute('aria-label', `Cambiar categoría de ${row.concepto || row.fuente || 'movimiento'}`);
+    categoryButton.textContent = row.categoria2 || 'PENDIENTE';
+    categoryCell.appendChild(categoryButton);
+    tableRow.appendChild(categoryCell);
+
+    const commentsCell = document.createElement('td');
+    commentsCell.textContent = row.comentarios || '—';
+    tableRow.appendChild(commentsCell);
+    const actionsCell = document.createElement('td');
+    const actions = document.createElement('div');
+    actions.className = 'row-actions';
+    const editButton = document.createElement('button');
+    editButton.className = 'action-btn edit-btn';
+    editButton.type = 'button';
+    editButton.dataset.importKey = row.clave;
+    editButton.title = 'Editar categoría y comentarios';
+    editButton.setAttribute('aria-label', 'Editar categoría y comentarios');
+    editButton.textContent = '✎';
+    actions.appendChild(editButton);
+    actionsCell.appendChild(actions);
+    tableRow.appendChild(actionsCell);
+    fragment.appendChild(tableRow);
+  });
+  targetBody.replaceChildren(fragment);
   applyDefaultTableSort(targetBody);
 
   targetBody.querySelectorAll('.import-row-checkbox').forEach((checkbox) => {
@@ -885,15 +1049,63 @@ function renderImportPreviewRows(rows, filesCount = 0, targetBody = importPrevie
     });
   });
 
-  targetBody.querySelectorAll('.edit-btn').forEach((button) => {
+  targetBody.querySelectorAll('.edit-btn, .import-category-edit').forEach((button) => {
     button.addEventListener('click', () => {
-      const row = filteredRows[Number(button.dataset.importRowIndex)];
+      const row = currentImportRows.find((item) => item.clave === button.dataset.importKey);
       if (row) {
-        openEditModal(row);
+        openImportRowEdit(row);
       }
     });
   });
   if (isImportTab) updateImportSelectionControls();
+}
+
+async function openImportRowEdit(row) {
+  editingImportKey = row.clave;
+  importRowEditError.textContent = '';
+  importRowCategory.value = '';
+  importRowComments.value = row.comentarios || '';
+  try {
+    const options = await fetchJson('/api/options');
+    populateSelect(importRowCategory, options.categorias, 'Selecciona una categoría');
+    importRowCategory.value = row.categoria2 || 'PENDIENTE';
+    importRowEditModal.classList.remove('hidden');
+    importRowEditModal.setAttribute('aria-hidden', 'false');
+    importRowCategory.focus();
+  } catch (error) {
+    importRowEditError.textContent = error.message;
+    importRowEditModal.classList.remove('hidden');
+    importRowEditModal.setAttribute('aria-hidden', 'false');
+  }
+}
+
+function closeImportRowEdit() {
+  importRowEditModal.classList.add('hidden');
+  importRowEditModal.setAttribute('aria-hidden', 'true');
+  importRowEditForm.reset();
+  importRowEditError.textContent = '';
+  editingImportKey = null;
+}
+
+function saveImportRowEdit(event) {
+  event.preventDefault();
+  if (!editingImportKey || !importRowCategory.value) return;
+  const row = currentImportRows.find((item) => item.clave === editingImportKey);
+  if (!row) {
+    importRowEditError.textContent = 'La fila de importación ya no está disponible. Actualiza la vista previa.';
+    return;
+  }
+  const changes = {
+    categoria2: importRowCategory.value,
+    comentarios: importRowComments.value.trim(),
+  };
+  Object.assign(row, changes);
+  pendingImportOverrides.set(editingImportKey, changes);
+  closeImportRowEdit();
+  refreshImportTabRows();
+  if (importPreviewRows) {
+    renderImportPreviewRows(currentImportRows, currentImportFilesCount);
+  }
 }
 
 function filterImportPreviewRows(rows) {
@@ -941,15 +1153,28 @@ async function loadImportPreview() {
     if (banks.includes(selectedBank)) importBankFilter.value = selectedBank;
     const availableKeys = new Set(rows.map((row) => row.clave));
     selectedImportKeys = new Set([...selectedImportKeys].filter((key) => availableKeys.has(key)));
-    currentImportRows = rows;
+    pendingImportOverrides = new Map(
+      [...pendingImportOverrides].filter(([key]) => availableKeys.has(key)),
+    );
+    currentImportRows = rows.map((row) => ({
+      ...row,
+      ...(pendingImportOverrides.get(row.clave) || {}),
+    }));
     currentImportFilesCount = filesCount;
     renderImportPreviewRows(rows, filesCount, importTabRows, importStatusText, importSummaryBadge);
+    const deletedFiles = Array.isArray(data.deleted_files) ? data.deleted_files : [];
+    const cleanupMessage = deletedFiles.length
+      ? `Se eliminaron archivos anteriores del mismo banco: ${deletedFiles.join(', ')}. `
+      : '';
+    if (cleanupMessage && importStatusText) {
+      importStatusText.textContent = `${cleanupMessage}${importStatusText.textContent}`;
+    }
     if (importPreviewSummary) {
-      importPreviewSummary.textContent = rows.length
+      importPreviewSummary.textContent = cleanupMessage + (rows.length
         ? `Se van a importar ${rows.length} registros pendientes desde la carpeta input.`
         : filesCount > 0
           ? `He revisado ${filesCount} archivo(s) de input y no quedan registros nuevos para importar.`
-          : 'No hay registros nuevos pendientes de importación.';
+          : 'No hay registros nuevos pendientes de importación.');
     }
   } catch (error) {
     console.error('loadImportPreview error:', error);
@@ -973,12 +1198,20 @@ async function confirmImportAndRefresh() {
   try {
     const result = await fetchJson('/api/importar_input', {
       method: 'POST',
-      body: JSON.stringify({ claves: [...selectedImportKeys] }),
+      body: JSON.stringify({
+        claves: [...selectedImportKeys],
+        ediciones: Object.fromEntries(
+          [...pendingImportOverrides.entries()]
+            .filter(([clave]) => selectedImportKeys.has(clave)),
+        ),
+      }),
     });
+    selectedImportKeys.forEach((clave) => pendingImportOverrides.delete(clave));
     if (importPreviewModal) {
       importPreviewModal.classList.add('hidden');
       importPreviewModal.setAttribute('aria-hidden', 'true');
     }
+    resetDashboardDateRange();
     await loadMovimientos();
     await loadSummary();
     await loadDashboard();
@@ -1069,14 +1302,6 @@ function renderMovimientos(items, append = false) {
     fragment.appendChild(row);
   });
   tableBody.appendChild(fragment);
-
-  const table = tableBody.closest('table');
-  const sort = tableSortStates.get(table);
-  if (!append) {
-    applyDefaultTableSort(tableBody);
-  } else if (sort) {
-    setTableSort(table, sort.columnIndex, sort.direction, [tableBody]);
-  }
 }
 
 tableBody.addEventListener('click', async (event) => {
@@ -1241,12 +1466,7 @@ document.querySelectorAll('.range-shortcut:not(#clearDashboardDateFilter)').forE
 
 if (clearDashboardDateFilter) {
   clearDashboardDateFilter.addEventListener('click', () => {
-    if (!dashboardRange.min || !dashboardRange.max) return;
-    activeRangePreset = 'all';
-    setRangeShortcutState();
-    dateStartSlider.value = '0';
-    dateEndSlider.value = String(Math.max(1, daysBetween(dashboardRange.min, dashboardRange.max)));
-    syncDashboardDateInputs();
+    resetDashboardDateRange();
     loadDashboard();
   });
 }
@@ -1365,11 +1585,19 @@ async function loadMovimientos(reset = true) {
     q: state.q,
     fuente: state.fuente,
     categoria: state.categoria,
+    sort_by: state.sortBy,
+    sort_dir: state.sortDir,
     page: String(nextPage),
     limit: String(movimientosPageSize),
   });
   if (state.dateStart) params.set('date_start', state.dateStart);
   if (state.dateEnd) params.set('date_end', state.dateEnd);
+  if (state.amountMin !== '') {
+    params.set('importe_min_cent', String(Math.round(Number(state.amountMin) * 100)));
+  }
+  if (state.amountMax !== '') {
+    params.set('importe_max_cent', String(Math.round(Number(state.amountMax) * 100)));
+  }
 
   movimientosLoading = true;
   try {
@@ -1418,19 +1646,50 @@ async function loadSummary() {
   renderSummary(data);
 }
 
+function createAccountVisibilityCell(account, field, label) {
+  const cell = document.createElement('td');
+  const toggle = document.createElement('input');
+  toggle.type = 'checkbox';
+  toggle.checked = Boolean(account[field]);
+  toggle.setAttribute('aria-label', `${label}: ${account.fuente}`);
+  toggle.addEventListener('change', async () => {
+    const previousValue = !toggle.checked;
+    toggle.disabled = true;
+    try {
+      const saved = await fetchJson(`/api/config/cuentas/${encodeURIComponent(account.fuente)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ [field]: toggle.checked }),
+      });
+      toggle.checked = Boolean(saved[field]);
+      accountConfigStatus.textContent = field === 'saldo_por_movimientos'
+        ? `${account.fuente} ${saved[field] ? 'calculará el saldo desde movimientos' : 'usará snapshots para calcular el saldo'}.`
+        : `${account.fuente} ${saved[field] ? 'se mostrará en' : 'no se mostrará en'} ${label}.`;
+    } catch (error) {
+      toggle.checked = previousValue;
+      accountConfigStatus.textContent = error.message;
+    } finally {
+      toggle.disabled = false;
+    }
+  });
+  cell.appendChild(toggle);
+  return cell;
+}
+
 async function loadAccountConfig() {
   accountConfigStatus.textContent = '';
-  const [data] = await Promise.all([
+  const [data, , budgetData] = await Promise.all([
     fetchJson('/api/config/cuentas'),
     loadSavingsProjectionConfig(),
+    fetchJson('/api/config/presupuestos'),
   ]);
   balanceHistoryMonthsInput.value = String(data.meses_saldo_historico || 18);
   savedBalanceHistoryMonths = balanceHistoryMonthsInput.value;
   balanceHistoryConfigStatus.textContent = '';
+  renderBudgetConfig(budgetData.categorias);
   accountConfigBody.replaceChildren();
 
   if (!data.cuentas.length) {
-    accountConfigBody.innerHTML = '<tr><td colspan="3" class="empty">No hay cuentas configuradas.</td></tr>';
+    accountConfigBody.innerHTML = '<tr><td colspan="5" class="empty">No hay cuentas configuradas.</td></tr>';
     return;
   }
 
@@ -1455,29 +1714,21 @@ async function loadAccountConfig() {
     currencyInput.append(amountInput, currencySymbol);
     amountCell.appendChild(currencyInput);
 
-    const balanceToggleCell = document.createElement('td');
-    const balanceToggle = document.createElement('input');
-    balanceToggle.type = 'checkbox';
-    balanceToggle.className = 'account-balance-toggle';
-    balanceToggle.checked = Boolean(account.incluir_en_saldos);
-    balanceToggle.setAttribute('aria-label', `Incluir ${account.fuente} en saldos`);
-    balanceToggle.addEventListener('change', async () => {
-      balanceToggle.disabled = true;
-      try {
-        const saved = await fetchJson(`/api/config/cuentas/${encodeURIComponent(account.fuente)}`, {
-          method: 'PUT',
-          body: JSON.stringify({ incluir_en_saldos: balanceToggle.checked }),
-        });
-        balanceToggle.checked = Boolean(saved.incluir_en_saldos);
-        accountConfigStatus.textContent = `${account.fuente} ${saved.incluir_en_saldos ? 'incluida en' : 'excluida de'} los saldos.`;
-      } catch (error) {
-        balanceToggle.checked = !balanceToggle.checked;
-        accountConfigStatus.textContent = error.message;
-      } finally {
-        balanceToggle.disabled = false;
-      }
-    });
-    balanceToggleCell.appendChild(balanceToggle);
+    const balanceToggleCell = createAccountVisibilityCell(
+      account,
+      'saldo_por_movimientos',
+      'Saldo desde movimientos',
+    );
+    const showInBalancesCell = createAccountVisibilityCell(
+      account,
+      'incluir_en_saldos',
+      'Saldos',
+    );
+    const summaryToggleCell = createAccountVisibilityCell(
+      account,
+      'incluir_en_resumen',
+      'Resumen',
+    );
 
     let savedAmountCent = account.ahorro_no_disponible_cent || 0;
     amountInput.addEventListener('change', async () => {
@@ -1501,8 +1752,88 @@ async function loadAccountConfig() {
         accountConfigStatus.textContent = error.message;
       }
     });
-    row.append(nameCell, amountCell, balanceToggleCell);
+    row.append(nameCell, amountCell, balanceToggleCell, showInBalancesCell, summaryToggleCell);
     accountConfigBody.appendChild(row);
+  });
+}
+
+function renderBudgetConfig(categories) {
+  budgetConfigBody.replaceChildren();
+  budgetConfigStatus.textContent = '';
+  if (!categories.length) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td');
+    cell.colSpan = 3;
+    cell.className = 'empty';
+    cell.textContent = 'No hay categorías de gasto configuradas.';
+    row.appendChild(cell);
+    budgetConfigBody.appendChild(row);
+    return;
+  }
+
+  categories.forEach((category) => {
+    const row = document.createElement('tr');
+    const groupCell = document.createElement('td');
+    groupCell.textContent = category.categoria1;
+    const categoryCell = document.createElement('td');
+    categoryCell.textContent = category.categoria2;
+    const amountCell = document.createElement('td');
+    const currencyInput = document.createElement('span');
+    currencyInput.className = 'currency-input';
+    const amountInput = document.createElement('input');
+    amountInput.type = 'text';
+    amountInput.inputMode = 'decimal';
+    amountInput.className = 'budget-config-amount';
+    amountInput.value = category.presupuesto_cent === null
+      ? ''
+      : formatEuroInputFromCents(category.presupuesto_cent);
+    amountInput.setAttribute('aria-label', `Presupuesto mensual para ${category.categoria2}`);
+    const currencySymbol = document.createElement('span');
+    currencySymbol.className = 'currency-symbol';
+    currencySymbol.textContent = '€';
+    currencySymbol.setAttribute('aria-hidden', 'true');
+    currencyInput.append(amountInput, currencySymbol);
+    amountCell.appendChild(currencyInput);
+    row.append(groupCell, categoryCell, amountCell);
+    budgetConfigBody.appendChild(row);
+
+    let savedAmountCent = category.presupuesto_cent;
+    amountInput.addEventListener('change', async () => {
+      const rawValue = amountInput.value.trim();
+      const amountCent = rawValue ? parseEuroInputToCents(rawValue) : null;
+      if (rawValue && (amountCent === null || amountCent < 0)) {
+        budgetConfigStatus.textContent = `Introduce un presupuesto válido para ${category.categoria2}.`;
+        amountInput.value = savedAmountCent === null
+          ? ''
+          : formatEuroInputFromCents(savedAmountCent);
+        return;
+      }
+
+      amountInput.disabled = true;
+      try {
+        const saved = await fetchJson(
+          `/api/config/presupuestos/${encodeURIComponent(category.categoria2)}`,
+          {
+            method: 'PUT',
+            body: JSON.stringify({ presupuesto_cent: amountCent }),
+          },
+        );
+        savedAmountCent = saved.presupuesto_cent;
+        amountInput.value = savedAmountCent === null
+          ? ''
+          : formatEuroInputFromCents(savedAmountCent);
+        budgetConfigStatus.textContent = savedAmountCent === null
+          ? `Presupuesto de ${category.categoria2} eliminado.`
+          : `Presupuesto de ${category.categoria2} guardado.`;
+      } catch (error) {
+        amountInput.value = savedAmountCent === null
+          ? ''
+          : formatEuroInputFromCents(savedAmountCent);
+        budgetConfigStatus.textContent = error.message;
+      } finally {
+        amountInput.disabled = false;
+      }
+    });
   });
 }
 
@@ -1746,7 +2077,6 @@ const savingsAmountFields = [
   'Gasto Extra2',
   'Aportaciones Abuela',
 ];
-const savingsBalanceFields = savingsAmountFields.slice(0, 11);
 const savingsFields = [
   'Mes',
   ...savingsAmountFields,
@@ -1834,9 +2164,17 @@ function getVisibleSavingsRecords() {
   return savingsRecords.filter((record) => savingsDateForInput(record.Mes) >= savedSavingsStartDate);
 }
 
+function getSavingsGraphRecords() {
+  return savingsRecords.filter((record) => {
+    const recordDate = savingsDateForInput(record.Mes);
+    return (!savedSavingsStartDate || recordDate >= savedSavingsStartDate)
+      && (!savedSavingsEndDate || recordDate <= savedSavingsEndDate);
+  });
+}
+
 function renderSavingsChart() {
   if (savingsChartInstance) savingsChartInstance.destroy();
-  const visibleRecords = getVisibleSavingsRecords();
+  const visibleRecords = getSavingsGraphRecords();
   const labels = visibleRecords.map((record) => record.Mes);
   const totalValues = visibleRecords.map((record) => {
     const value = Number(record['Ahorro Total']);
@@ -1930,6 +2268,113 @@ function renderSavingsChart() {
   });
 }
 
+function renderSavingsColumnToggles() {
+  savingsColumnToggles.replaceChildren();
+  const palette = [
+    '#2962ff', '#1ea672', '#e67e22', '#a23be0', '#e53935', '#00838f',
+    '#8d6e63', '#7cb342', '#d81b60', '#5e35b1', '#546e7a',
+  ];
+  savedSavingsChartColumns.forEach((column, index) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'savings-column-toggle';
+    button.textContent = column;
+    button.setAttribute('aria-pressed', 'true');
+    button.style.setProperty('--savings-column-color', palette[savingsBalanceFields.indexOf(column)] || palette[index]);
+    button.addEventListener('click', () => {
+      const dataset = savingsColumnsChartInstance?.data.datasets.find((item) => item.label === column);
+      if (!dataset) return;
+      dataset.hidden = !dataset.hidden;
+      button.setAttribute('aria-pressed', String(!dataset.hidden));
+      savingsColumnsChartInstance.update();
+    });
+    savingsColumnToggles.appendChild(button);
+  });
+  if (!savedSavingsChartColumns.length) {
+    const empty = document.createElement('span');
+    empty.className = 'muted';
+    empty.textContent = 'No hay columnas seleccionadas para mostrar.';
+    savingsColumnToggles.appendChild(empty);
+  }
+}
+
+function renderSavingsColumnsChart() {
+  if (savingsColumnsChartInstance) savingsColumnsChartInstance.destroy();
+  const records = getSavingsGraphRecords();
+  const palette = [
+    '#2962ff', '#1ea672', '#e67e22', '#a23be0', '#e53935', '#00838f',
+    '#8d6e63', '#7cb342', '#d81b60', '#5e35b1', '#546e7a',
+  ];
+  const datasets = savedSavingsChartColumns.map((column) => ({
+    label: column,
+    data: records.map((record) => parseSavingsAmount(record[column])),
+    borderColor: palette[savingsBalanceFields.indexOf(column)],
+    backgroundColor: palette[savingsBalanceFields.indexOf(column)],
+    tension: 0.2,
+    spanGaps: false,
+    fill: true,
+  }));
+  savingsColumnsChartInstance = new Chart(savingsColumnsChartCanvas, {
+    type: 'line',
+    data: {
+      labels: records.map((record) => record.Mes),
+      datasets,
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { stacked: true, title: { display: true, text: 'Mes' } },
+        y: {
+          stacked: true,
+          title: { display: true, text: 'Saldo acumulado (€)' },
+          ticks: { callback: (value) => formatSavingsAmount(value) },
+        },
+      },
+    },
+  });
+  renderSavingsColumnToggles();
+}
+
+function renderSavingsColumnConfig() {
+  const renderGroup = (container, selected, groupName) => {
+    container.replaceChildren();
+    savingsBalanceFields.forEach((column, index) => {
+      const label = document.createElement('label');
+      label.className = 'savings-column-config-option';
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.name = `${groupName}-${index}`;
+      checkbox.value = column;
+      checkbox.checked = selected.includes(column);
+      label.append(checkbox, document.createTextNode(column));
+      container.appendChild(label);
+    });
+  };
+  renderGroup(savingsChartColumnsConfig, savedSavingsChartColumns, 'chart-column');
+  renderGroup(savingsModalColumnsConfig, savedSavingsModalColumns, 'modal-column');
+}
+
+function applySavingsModalColumnVisibility() {
+  savingsBalanceFields.forEach((column) => {
+    const input = savingsForm.elements.namedItem(column);
+    input.closest('label').hidden = !savedSavingsModalColumns.includes(column);
+  });
+}
+
+function applySavingsColumnSettings(config) {
+  savedSavingsChartColumns = Array.isArray(config.columnas_grafica_ahorro)
+    ? config.columnas_grafica_ahorro.filter((column) => savingsBalanceFields.includes(column))
+    : [...savingsBalanceFields];
+  savedSavingsModalColumns = Array.isArray(config.columnas_modal_ahorro)
+    ? config.columnas_modal_ahorro.filter((column) => savingsBalanceFields.includes(column))
+    : [...savingsBalanceFields];
+  renderSavingsColumnConfig();
+  applySavingsModalColumnVisibility();
+}
+
 function renderSavingsRows() {
   const visibleRecords = getVisibleSavingsRecords();
   savingsRows.replaceChildren();
@@ -1985,12 +2430,16 @@ async function loadSavings() {
     savedSavingsProjectionYears = String(config.anios_proyeccion_ahorro);
     savedSavingsForecastMonths = String(config.meses_media_forecast_ahorro);
     savedSavingsStartDate = config.fecha_inicio_evolucion_ahorro || '';
+    savedSavingsEndDate = config.fecha_fin_evolucion_ahorro || '';
+    applySavingsColumnSettings(config);
     savingsProjectionYearsInput.value = savedSavingsProjectionYears;
     savingsForecastMonthsInput.value = savedSavingsForecastMonths;
     savingsStartDateInput.value = savedSavingsStartDate;
+    savingsEndDateInput.value = savedSavingsEndDate;
     savingsRecords = data.rows;
     renderSavingsRows();
     renderSavingsChart();
+    renderSavingsColumnsChart();
     savingsStatus.textContent = `${getVisibleSavingsRecords().length} de ${savingsRecords.length} registros mostrados.`;
   } catch (error) {
     savingsStatus.textContent = error.message;
@@ -2023,6 +2472,7 @@ function openSavingsModal(record = null) {
       input.value = value ?? '';
     }
   });
+  applySavingsModalColumnVisibility();
   savingsModal.classList.remove('hidden');
   savingsModal.setAttribute('aria-hidden', 'false');
   savingsForm.elements.namedItem('Mes').focus();
@@ -2039,7 +2489,10 @@ async function saveSavingsRecord(event) {
   const payload = {};
   savingsFields.forEach((field) => {
     const input = savingsForm.elements.namedItem(field);
-    payload[field] = input.value === ''
+    payload[field] = savingsBalanceFields.includes(field)
+      && !savedSavingsModalColumns.includes(field)
+      ? 0
+      : input.value === ''
       ? null
       : savingsAmountFields.includes(field)
         ? Number(input.value)
@@ -2068,10 +2521,13 @@ async function loadSavingsProjectionConfig() {
   savedSavingsProjectionYears = String(data.anios_proyeccion_ahorro);
   savedSavingsForecastMonths = String(data.meses_media_forecast_ahorro);
   savedSavingsStartDate = data.fecha_inicio_evolucion_ahorro || '';
+  savedSavingsEndDate = data.fecha_fin_evolucion_ahorro || '';
+  applySavingsColumnSettings(data);
   savingsProjectionYearsInput.value = savedSavingsProjectionYears;
   savingsForecastMonthsInput.value = savedSavingsForecastMonths;
   savingsStartDateInput.value = savedSavingsStartDate;
-  savingsProjectionConfigStatus.textContent = '';
+  savingsEndDateInput.value = savedSavingsEndDate;
+  savingsDateRangeStatus.textContent = '';
 }
 
 async function saveSavingsProjectionConfig() {
@@ -2120,23 +2576,62 @@ async function saveSavingsForecastMonths() {
   }
 }
 
-async function saveSavingsStartDate() {
+async function saveSavingsDateRange() {
+  if (
+    savingsStartDateInput.value
+    && savingsEndDateInput.value
+    && savingsStartDateInput.value > savingsEndDateInput.value
+  ) {
+    savingsDateRangeStatus.textContent = 'La fecha inicial no puede ser posterior a la fecha final.';
+    savingsStartDateInput.value = savedSavingsStartDate;
+    savingsEndDateInput.value = savedSavingsEndDate;
+    return;
+  }
+
   try {
     const result = await fetchJson('/api/config/ahorro-proyeccion', {
       method: 'PUT',
-      body: JSON.stringify({ fecha_inicio_evolucion_ahorro: savingsStartDateInput.value }),
+      body: JSON.stringify({
+        fecha_inicio_evolucion_ahorro: savingsStartDateInput.value,
+        fecha_fin_evolucion_ahorro: savingsEndDateInput.value,
+      }),
     });
     savedSavingsStartDate = result.fecha_inicio_evolucion_ahorro || '';
+    savedSavingsEndDate = result.fecha_fin_evolucion_ahorro || '';
     savingsStartDateInput.value = savedSavingsStartDate;
-    savingsProjectionConfigStatus.textContent = savedSavingsStartDate
-      ? `La evolución del ahorro se mostrará desde el ${formatDateValue(savedSavingsStartDate)}.`
-      : 'Se mostrarán todos los registros de ahorro.';
+    savingsEndDateInput.value = savedSavingsEndDate;
+    savingsDateRangeStatus.textContent = savedSavingsStartDate || savedSavingsEndDate
+      ? `Rango guardado: ${savedSavingsStartDate ? formatDateValue(savedSavingsStartDate) : 'sin inicio'} – ${savedSavingsEndDate ? formatDateValue(savedSavingsEndDate) : 'sin final'}.`
+      : 'Se mostrarán todos los registros en ambas gráficas.';
     renderSavingsRows();
     renderSavingsChart();
-    savingsStatus.textContent = `${getVisibleSavingsRecords().length} de ${savingsRecords.length} registros mostrados.`;
+    renderSavingsColumnsChart();
   } catch (error) {
     savingsStartDateInput.value = savedSavingsStartDate;
-    savingsProjectionConfigStatus.textContent = error.message;
+    savingsEndDateInput.value = savedSavingsEndDate;
+    savingsDateRangeStatus.textContent = error.message;
+  }
+}
+
+async function saveSavingsColumnSettings() {
+  const chartColumns = [...savingsChartColumnsConfig.querySelectorAll('input:checked')]
+    .map((input) => input.value);
+  const modalColumns = [...savingsModalColumnsConfig.querySelectorAll('input:checked')]
+    .map((input) => input.value);
+  try {
+    const result = await fetchJson('/api/config/ahorro-proyeccion', {
+      method: 'PUT',
+      body: JSON.stringify({
+        columnas_grafica_ahorro: chartColumns,
+        columnas_modal_ahorro: modalColumns,
+      }),
+    });
+    applySavingsColumnSettings(result);
+    renderSavingsColumnsChart();
+    savingsColumnsConfigStatus.textContent = 'Columnas de ahorro actualizadas.';
+  } catch (error) {
+    renderSavingsColumnConfig();
+    savingsColumnsConfigStatus.textContent = error.message;
   }
 }
 
@@ -2203,6 +2698,16 @@ dateEndFilter.addEventListener('change', (event) => {
   loadMovimientos();
 });
 
+amountMinFilter.addEventListener('change', (event) => {
+  state.amountMin = event.target.value;
+  loadMovimientos();
+});
+
+amountMaxFilter.addEventListener('change', (event) => {
+  state.amountMax = event.target.value;
+  loadMovimientos();
+});
+
 function setActiveView(viewName) {
   activeViewName = viewName;
   const isDashboard = viewName === 'dashboard';
@@ -2260,7 +2765,9 @@ budgetMonth.value = new Date().toISOString().slice(0, 7);
 budgetMonth.addEventListener('change', loadBudgets);
 savingsProjectionYearsInput.addEventListener('change', saveSavingsProjectionConfig);
 savingsForecastMonthsInput.addEventListener('change', saveSavingsForecastMonths);
-savingsStartDateInput.addEventListener('change', saveSavingsStartDate);
+savingsStartDateInput.addEventListener('change', saveSavingsDateRange);
+savingsEndDateInput.addEventListener('change', saveSavingsDateRange);
+document.getElementById('saveSavingsColumnsConfig').addEventListener('click', saveSavingsColumnSettings);
 document.getElementById('addSavingsRecord').addEventListener('click', () => openSavingsModal());
 savingsForm.addEventListener('submit', saveSavingsRecord);
 document.getElementById('closeSavingsModal').addEventListener('click', closeSavingsModal);
@@ -2288,11 +2795,18 @@ document.getElementById('resetFilters').addEventListener('click', () => {
   state.categoria = '';
   state.dateStart = '';
   state.dateEnd = '';
+  state.amountMin = '';
+  state.amountMax = '';
+  state.sortBy = 'f_valor';
+  state.sortDir = 'desc';
+  updateMovimientosSortIndicators();
   searchInput.value = '';
   fuenteFilter.value = '';
   categoriaFilter.value = '';
   dateStartFilter.value = '';
   dateEndFilter.value = '';
+  amountMinFilter.value = '';
+  amountMaxFilter.value = '';
   loadMovimientos();
 });
 
@@ -2304,6 +2818,14 @@ exportExcelBtn.addEventListener('click', () => {
   });
   if (state.dateStart) params.set('date_start', state.dateStart);
   if (state.dateEnd) params.set('date_end', state.dateEnd);
+  if (state.amountMin !== '') {
+    params.set('importe_min_cent', String(Math.round(Number(state.amountMin) * 100)));
+  }
+  if (state.amountMax !== '') {
+    params.set('importe_max_cent', String(Math.round(Number(state.amountMax) * 100)));
+  }
+  params.set('sort_by', state.sortBy);
+  params.set('sort_dir', state.sortDir);
   window.location.href = `/api/movimientos/export?${params.toString()}`;
 });
 
@@ -2446,6 +2968,22 @@ document.getElementById('closeImportPreviewModal').addEventListener('click', () 
   importPreviewModal.classList.add('hidden');
   importPreviewModal.setAttribute('aria-hidden', 'true');
 });
+document.getElementById('closeImportRowEditModal').addEventListener('click', closeImportRowEdit);
+document.getElementById('cancelImportRowEditModal').addEventListener('click', closeImportRowEdit);
+importRowEditModal.addEventListener('click', (event) => {
+  if (event.target === importRowEditModal) closeImportRowEdit();
+});
+importRowCategory.addEventListener('keydown', (event) => {
+  if (
+    event.key !== 'Enter'
+    || event.isComposing
+    || event.repeat
+    || !importRowCategory.value
+  ) return;
+  event.preventDefault();
+  importRowEditForm.requestSubmit(importRowEditForm.querySelector('button[type="submit"]'));
+});
+importRowEditForm.addEventListener('submit', saveImportRowEdit);
 modal.addEventListener('click', (event) => {
   if (event.target === modal) {
     closeModal();
