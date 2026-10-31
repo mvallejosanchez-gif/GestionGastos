@@ -454,6 +454,36 @@ tbody tr:hover {
   width: min(190px, 100%);
 }
 
+.budget-year-selector {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.budget-year-selector .field-group {
+  width: 120px;
+}
+
+.budget-year-selector button {
+  min-width: 40px;
+  min-height: 38px;
+}
+
+.budget-config-table {
+  min-width: 1120px;
+}
+
+.budget-config-table th:nth-child(n + 3),
+.budget-config-table td:nth-child(n + 3) {
+  min-width: 100px;
+}
+
+.budget-config-amount {
+  width: 100%;
+  min-width: 82px;
+}
+
 .budget-summary {
   margin-bottom: 12px;
   color: var(--muted);
@@ -466,7 +496,7 @@ tbody tr:hover {
 }
 
 .budget-config-table {
-  min-width: 680px;
+  min-width: 1120px;
 }
 
 .account-config-table {

@@ -20,6 +20,14 @@ CREATE TABLE IF NOT EXISTS cuentas (
   saldo_por_movimientos     INTEGER NOT NULL DEFAULT 0  -- acumular importes e ignorar snapshots
 );
 
+CREATE TABLE IF NOT EXISTS presupuestos_mensuales (
+  anio          INTEGER NOT NULL,
+  mes           INTEGER NOT NULL CHECK (mes BETWEEN 1 AND 12),
+  categoria2    TEXT NOT NULL COLLATE NOCASE,
+  importe_cent  INTEGER,
+  PRIMARY KEY (anio, mes, categoria2)
+);
+
 CREATE TABLE IF NOT EXISTS movimientos (
   id              INTEGER PRIMARY KEY,
   fuente          TEXT NOT NULL COLLATE NOCASE,

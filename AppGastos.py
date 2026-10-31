@@ -136,7 +136,7 @@ def get_savings_column_settings(conn: sqlite3.Connection) -> dict[str, list[str]
     }
 
 
-def ensure_budget_settings(conn: sqlite3.Connection) -> None:
+def ensure_budget_settings(conn: sqlite3.Connection, target_year: int | None = None) -> None:
     ensure_app_settings(conn)
     conn.executemany(
         'INSERT OR IGNORE INTO app_config (clave, valor) VALUES (?, ?)',
@@ -145,6 +145,62 @@ def ensure_budget_settings(conn: sqlite3.Connection) -> None:
             for category, amount in DEFAULT_MONTHLY_BUDGETS_CENTS.items()
         ),
     )
+    conn.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS presupuestos_mensuales (
+            anio INTEGER NOT NULL,
+            mes INTEGER NOT NULL CHECK (mes BETWEEN 1 AND 12),
+            categoria2 TEXT NOT NULL COLLATE NOCASE,
+            importe_cent INTEGER,
+            PRIMARY KEY (anio, mes, categoria2)
+        )
+        '''
+    )
+    current_year = date.today().year
+    migration_complete = conn.execute(
+        'SELECT 1 FROM app_config WHERE clave = ?',
+        ('presupuestos_mensuales_migrados',),
+    ).fetchone()
+    years_to_initialize = [target_year or current_year]
+    if migration_complete is None:
+        min_movement_year = conn.execute(
+            "SELECT MIN(CAST(strftime('%Y', COALESCE(f_valor, fecha)) AS INTEGER)) FROM movimientos"
+        ).fetchone()[0]
+        first_year = min(int(min_movement_year or current_year), current_year)
+        last_year = max(current_year, target_year or current_year)
+        years_to_initialize = list(range(first_year, last_year + 1))
+    legacy_budgets = {
+        row['clave'][len('presupuesto:'):]: (
+            int(row['valor']) if row['valor'] else None
+        )
+        for row in conn.execute(
+            "SELECT clave, valor FROM app_config WHERE clave LIKE 'presupuesto:%'"
+        )
+    }
+    categories = conn.execute(
+        "SELECT categoria2 FROM categorias WHERE categoria0 = 'Gasto'"
+    ).fetchall()
+    conn.executemany(
+        '''
+        INSERT OR IGNORE INTO presupuestos_mensuales
+            (anio, mes, categoria2, importe_cent)
+        VALUES (?, ?, ?, ?)
+        ''',
+        (
+            (year, month, category['categoria2'], legacy_budgets.get(
+                category['categoria2'],
+                DEFAULT_MONTHLY_BUDGETS_CENTS.get(category['categoria2']),
+            ))
+            for year in years_to_initialize
+            for month in range(1, 13)
+            for category in categories
+        ),
+    )
+    if migration_complete is None:
+        conn.execute(
+            'INSERT INTO app_config (clave, valor) VALUES (?, ?)',
+            ('presupuestos_mensuales_migrados', '1'),
+        )
     conn.commit()
 
 
@@ -680,37 +736,97 @@ def api_config_cuentas():
 
 @app.get('/api/config/presupuestos')
 def api_config_presupuestos():
+    raw_year = request.args.get('year', '').strip()
+    try:
+        year = int(raw_year) if raw_year else date.today().year
+        if not 1900 <= year <= 2100:
+            raise ValueError
+    except ValueError:
+        return jsonify({'error': 'El año seleccionado no es válido'}), 400
+
     conn = get_db()
-    ensure_budget_settings(conn)
+    ensure_budget_settings(conn, year)
     rows = conn.execute(
         '''
-        SELECT c.categoria1, c.categoria2, ac.valor AS presupuesto_cent
+        SELECT c.categoria1, c.categoria2, pm.mes, pm.importe_cent AS presupuesto_cent
         FROM categorias c
-        LEFT JOIN app_config ac ON ac.clave = 'presupuesto:' || c.categoria2
+        LEFT JOIN presupuestos_mensuales pm
+          ON pm.categoria2 = c.categoria2 AND pm.anio = ?
         WHERE c.categoria0 = 'Gasto'
-        ORDER BY c.categoria1 COLLATE NOCASE, c.categoria2 COLLATE NOCASE
-        '''
+        ORDER BY c.categoria1 COLLATE NOCASE, c.categoria2 COLLATE NOCASE, pm.mes
+        ''',
+        (year,),
     ).fetchall()
     conn.close()
+    budgets = {}
+    for row in rows:
+        category = budgets.setdefault(row['categoria2'], {
+            'categoria1': row['categoria1'],
+            'categoria2': row['categoria2'],
+            'presupuestos_cent': [None] * 12,
+        })
+        if row['mes'] is not None:
+            category['presupuestos_cent'][int(row['mes']) - 1] = row['presupuesto_cent']
     return jsonify({
-        'categorias': [
-            {
-                'categoria1': row['categoria1'],
-                'categoria2': row['categoria2'],
-                'presupuesto_cent': (
-                    int(row['presupuesto_cent']) if row['presupuesto_cent'] else None
-                ),
-            }
-            for row in rows
-        ],
+        'anio': year,
+        'categorias': list(budgets.values()),
     })
+
+
+@app.post('/api/config/presupuestos/copiar')
+def api_copy_config_presupuestos():
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'Indica el año de origen'}), 400
+    source_year = payload.get('anio_origen')
+    if isinstance(source_year, bool) or not isinstance(source_year, int):
+        return jsonify({'error': 'El año de origen no es válido'}), 400
+    if not 1900 <= source_year < 2100:
+        return jsonify({'error': 'El año de origen debe estar entre 1900 y 2099'}), 400
+
+    conn = get_db()
+    try:
+        ensure_budget_settings(conn, source_year + 1)
+        cursor = conn.execute(
+            '''
+            INSERT INTO presupuestos_mensuales (anio, mes, categoria2, importe_cent)
+            SELECT ?, mes, categoria2, importe_cent
+            FROM presupuestos_mensuales
+            WHERE anio = ?
+            ON CONFLICT(anio, mes, categoria2)
+            DO UPDATE SET importe_cent = excluded.importe_cent
+            ''',
+            (source_year + 1, source_year),
+        )
+        conn.commit()
+        return jsonify({
+            'anio_origen': source_year,
+            'anio_destino': source_year + 1,
+            'presupuestos_copiados': cursor.rowcount,
+        })
+    finally:
+        conn.close()
 
 
 @app.put('/api/config/presupuestos/<path:categoria2>')
 def api_update_config_presupuesto(categoria2: str):
     payload = request.get_json(silent=True)
     if not isinstance(payload, dict) or 'presupuesto_cent' not in payload:
-        return jsonify({'error': 'Indica el presupuesto mensual en céntimos o null para quitarlo'}), 400
+        return jsonify({'error': 'Indica año, mes y presupuesto en céntimos o null para quitarlo'}), 400
+
+    raw_year = payload.get('anio')
+    raw_month = payload.get('mes')
+    if (
+        isinstance(raw_year, bool)
+        or isinstance(raw_month, bool)
+        or not isinstance(raw_year, int)
+        or not isinstance(raw_month, int)
+    ):
+        return jsonify({'error': 'Indica un año y un mes válidos'}), 400
+    year = raw_year
+    month = raw_month
+    if not 1900 <= year <= 2100 or not 1 <= month <= 12:
+        return jsonify({'error': 'El año o el mes no son válidos'}), 400
 
     raw_amount = payload['presupuesto_cent']
     if raw_amount is None:
@@ -723,7 +839,7 @@ def api_update_config_presupuesto(categoria2: str):
         return jsonify({'error': 'El presupuesto no puede ser negativo'}), 400
 
     conn = get_db()
-    ensure_budget_settings(conn)
+    ensure_budget_settings(conn, year)
     category = conn.execute(
         "SELECT categoria2 FROM categorias WHERE categoria2 = ? AND categoria0 = 'Gasto'",
         (categoria2,),
@@ -732,16 +848,21 @@ def api_update_config_presupuesto(categoria2: str):
         conn.close()
         return jsonify({'error': 'Categoría de gasto no encontrada'}), 404
 
-    stored_value = '' if amount_cent is None else str(amount_cent)
     conn.execute(
-        'INSERT INTO app_config (clave, valor) VALUES (?, ?) '
-        'ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor',
-        (f'presupuesto:{category["categoria2"]}', stored_value),
+        '''
+        INSERT INTO presupuestos_mensuales (anio, mes, categoria2, importe_cent)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(anio, mes, categoria2)
+        DO UPDATE SET importe_cent = excluded.importe_cent
+        ''',
+        (year, month, category['categoria2'], amount_cent),
     )
     conn.commit()
     conn.close()
     return jsonify({
         'categoria2': category['categoria2'],
+        'anio': year,
+        'mes': month,
         'presupuesto_cent': amount_cent,
     })
 
@@ -845,9 +966,10 @@ def api_presupuestos():
         month = datetime.strptime(requested_month, '%Y-%m').strftime('%Y-%m')
     except ValueError:
         month = datetime.now().strftime('%Y-%m')
+    year, month_number = map(int, month.split('-'))
 
     conn = get_db()
-    ensure_budget_settings(conn)
+    ensure_budget_settings(conn, year)
     rows = conn.execute(
         '''
         SELECT c.categoria1, c.categoria2,
@@ -863,12 +985,25 @@ def api_presupuestos():
         (month,),
     ).fetchall()
     budget_values = {
-        row['clave'][len('presupuesto:'):]: row['valor']
+        row['categoria2']: row['importe_cent']
         for row in conn.execute(
-            "SELECT clave, valor FROM app_config WHERE clave LIKE 'presupuesto:%'"
+            '''
+            SELECT categoria2, importe_cent
+            FROM presupuestos_mensuales
+            WHERE anio = ? AND mes = ?
+            ''',
+            (year, month_number),
         ).fetchall()
     }
     conn.close()
+
+    current_date = date.today()
+    if year < current_date.year:
+        completed_month = 12
+    elif year == current_date.year:
+        completed_month = current_date.month - 1
+    else:
+        completed_month = 0
 
     groups = {}
     budget_total_cent = 0
@@ -876,8 +1011,7 @@ def api_presupuestos():
     for row in rows:
         category1 = row['categoria1'] or '(sin categoría)'
         category2 = row['categoria2'] or '(sin categoría)'
-        budget_value = budget_values.get(category2, '')
-        budget_cent = int(budget_value) if budget_value else None
+        budget_cent = budget_values.get(category2)
         actual_cent = -int(row['importe_cent'] or 0)
         if budget_cent is None and actual_cent == 0:
             continue
@@ -908,12 +1042,89 @@ def api_presupuestos():
             else None
         )
 
+    annual_groups = {}
+    annual_budget_total_cent = 0
+    annual_actual_total_cent = 0
+    if completed_month:
+        conn = get_db()
+        ensure_budget_settings(conn, year)
+        annual_rows = conn.execute(
+            '''
+            SELECT c.categoria1, c.categoria2,
+                   COALESCE(actual.importe_cent, 0) AS importe_cent,
+                   budgets.budget_cent,
+                   COALESCE(budgets.budget_month_count, 0) AS budget_month_count
+            FROM categorias c
+            LEFT JOIN (
+                SELECT categoria2, SUM(importe_cent) AS importe_cent
+                FROM movimientos
+                WHERE strftime('%Y', date(COALESCE(f_valor, fecha))) = ?
+                  AND CAST(strftime('%m', date(COALESCE(f_valor, fecha))) AS INTEGER) <= ?
+                GROUP BY categoria2
+            ) actual ON actual.categoria2 = c.categoria2
+            LEFT JOIN (
+                SELECT categoria2, SUM(importe_cent) AS budget_cent,
+                       COUNT(importe_cent) AS budget_month_count
+                FROM presupuestos_mensuales
+                WHERE anio = ? AND mes <= ?
+                GROUP BY categoria2
+            ) budgets ON budgets.categoria2 = c.categoria2
+            WHERE c.categoria0 = 'Gasto'
+            ORDER BY c.categoria1 COLLATE NOCASE, c.categoria2 COLLATE NOCASE
+            ''',
+            (str(year), completed_month, year, completed_month),
+        ).fetchall()
+        conn.close()
+
+        for row in annual_rows:
+            actual_cent = -int(row['importe_cent'] or 0)
+            budget_cent = (
+                int(row['budget_cent'])
+                if row['budget_month_count']
+                else None
+            )
+            if budget_cent is None and actual_cent == 0:
+                continue
+            category1 = row['categoria1'] or '(sin categoría)'
+            group = annual_groups.setdefault(category1, {
+                'categoria1': category1,
+                'budget_cent': None,
+                'actual_cent': 0,
+                'children': [],
+            })
+            group['actual_cent'] += actual_cent
+            annual_actual_total_cent += actual_cent
+            if budget_cent is not None:
+                group['budget_cent'] = (group['budget_cent'] or 0) + budget_cent
+                annual_budget_total_cent += budget_cent
+            group['children'].append({
+                'categoria2': row['categoria2'] or '(sin categoría)',
+                'budget_cent': budget_cent,
+                'actual_cent': actual_cent,
+                'difference_cent': budget_cent - actual_cent if budget_cent is not None else None,
+            })
+
+        for group in annual_groups.values():
+            group['difference_cent'] = (
+                group['budget_cent'] - group['actual_cent']
+                if group['budget_cent'] is not None
+                else None
+            )
+
     return jsonify({
         'month': month,
         'groups': list(groups.values()),
         'budget_total_cent': budget_total_cent,
         'actual_total_cent': actual_total_cent,
         'difference_total_cent': budget_total_cent - actual_total_cent,
+        'annual': {
+            'year': year,
+            'through_month': completed_month,
+            'groups': list(annual_groups.values()),
+            'budget_total_cent': annual_budget_total_cent,
+            'actual_total_cent': annual_actual_total_cent,
+            'difference_total_cent': annual_budget_total_cent - annual_actual_total_cent,
+        },
     })
 
 

@@ -76,6 +76,61 @@ class GastosAppTests(unittest.TestCase):
             self.assertEqual(payload['categoria2'], 'Supermercado')
             self.assertEqual([item['concepto'] for item in payload['items']], ['Compra octubre'])
 
+    def test_budget_report_includes_year_to_date_through_last_completed_month(self):
+        class FixedDate(date):
+            @classmethod
+            def today(cls):
+                return cls(2026, 10, 31)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'gastos.db'
+            conn = sqlite3.connect(db_path)
+            schema_sql = Path(__file__).resolve().parent / 'schema.sql'
+            conn.executescript(schema_sql.read_text(encoding='utf-8'))
+            conn.execute(
+                "INSERT INTO categorias (categoria2, categoria1, categoria0) VALUES (?, ?, 'Gasto')",
+                ('Gasto de prueba', 'Alimentación'),
+            )
+            conn.executemany(
+                '''
+                INSERT INTO movimientos (
+                    fuente, f_valor, fecha, concepto, movimiento, importe_cent,
+                    divisa, categoria2, clave
+                ) VALUES ('BBVA', ?, ?, ?, 'Tarjeta', ?, 'EUR', 'Gasto de prueba', ?)
+                ''',
+                [
+                    ('2026-01-15', '2026-01-15', 'Compra enero', -1000, 'annual-jan'),
+                    ('2026-09-15', '2026-09-15', 'Compra septiembre', -2500, 'annual-sep'),
+                    ('2026-10-15', '2026-10-15', 'Compra octubre', -5000, 'annual-oct'),
+                ],
+            )
+            conn.executemany(
+                '''
+                INSERT INTO presupuestos_mensuales (anio, mes, categoria2, importe_cent)
+                VALUES (2026, ?, 'Gasto de prueba', ?)
+                ''',
+                [(1, 10000), (9, 12000)],
+            )
+            conn.commit()
+            conn.close()
+
+            with patch('AppGastos.DB_PATH', db_path), patch('AppGastos.date', FixedDate):
+                response = self.client.get('/api/presupuestos?month=2026-10')
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            annual = payload['annual']
+            self.assertEqual(annual['year'], 2026)
+            self.assertEqual(annual['through_month'], 9)
+            self.assertEqual(annual['budget_total_cent'], 22000)
+            self.assertEqual(annual['actual_total_cent'], 3500)
+            self.assertEqual(annual['difference_total_cent'], 18500)
+            self.assertEqual(
+                annual['groups'][0]['children'][0]['actual_cent'],
+                3500,
+            )
+            self.assertEqual(payload['actual_total_cent'], 5000)
+
     def test_budget_amounts_are_editable_and_empty_categories_are_hidden(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = Path(tmpdir) / 'gastos.db'
@@ -105,30 +160,79 @@ class GastosAppTests(unittest.TestCase):
             conn.close()
 
             with patch('AppGastos.DB_PATH', db_path):
-                config_response = self.client.get('/api/config/presupuestos')
+                config_response = self.client.get('/api/config/presupuestos?year=2026')
+                next_year_config = self.client.get('/api/config/presupuestos?year=2027')
                 update_response = self.client.put(
                     '/api/config/presupuestos/Supermercado',
-                    json={'presupuesto_cent': 65000},
+                    json={'anio': 2026, 'mes': 10, 'presupuesto_cent': 65000},
+                )
+                next_month_update = self.client.put(
+                    '/api/config/presupuestos/Supermercado',
+                    json={'anio': 2026, 'mes': 11, 'presupuesto_cent': 72000},
+                )
+                destination_update = self.client.put(
+                    '/api/config/presupuestos/Supermercado',
+                    json={'anio': 2027, 'mes': 10, 'presupuesto_cent': 99000},
+                )
+                copy_response = self.client.post(
+                    '/api/config/presupuestos/copiar',
+                    json={'anio_origen': 2026},
+                )
+                copied_config = self.client.get('/api/config/presupuestos?year=2027')
+                invalid_copy_response = self.client.post(
+                    '/api/config/presupuestos/copiar',
+                    json={'anio_origen': 2100},
                 )
                 report_response = self.client.get('/api/presupuestos?month=2026-10')
+                next_month_report = self.client.get('/api/presupuestos?month=2026-11')
+                reloaded_config = self.client.get('/api/config/presupuestos?year=2026')
                 clear_response = self.client.put(
                     '/api/config/presupuestos/Supermercado',
-                    json={'presupuesto_cent': None},
+                    json={'anio': 2026, 'mes': 10, 'presupuesto_cent': None},
                 )
                 report_without_budget_response = self.client.get('/api/presupuestos?month=2026-10')
 
             self.assertEqual(config_response.status_code, 200)
             config_categories = {
-                item['categoria2']: item['presupuesto_cent']
+                item['categoria2']: item['presupuestos_cent']
                 for item in config_response.get_json()['categorias']
             }
-            self.assertEqual(config_categories['Supermercado'], 50000)
-            self.assertIsNone(config_categories['Sin presupuesto'])
+            self.assertEqual(config_categories['Supermercado'][9], 50000)
+            self.assertIsNone(config_categories['Sin presupuesto'][9])
+            self.assertEqual(next_year_config.status_code, 200)
+            next_year_categories = {
+                item['categoria2']: item['presupuestos_cent']
+                for item in next_year_config.get_json()['categorias']
+            }
+            self.assertEqual(next_year_categories['Supermercado'][9], 50000)
             self.assertEqual(update_response.status_code, 200)
             self.assertEqual(update_response.get_json()['presupuesto_cent'], 65000)
+            self.assertEqual(next_month_update.status_code, 200)
+            self.assertEqual(destination_update.status_code, 200)
+            self.assertEqual(copy_response.status_code, 200)
+            self.assertEqual(copy_response.get_json()['anio_destino'], 2027)
+            self.assertGreater(copy_response.get_json()['presupuestos_copiados'], 0)
+            self.assertEqual(invalid_copy_response.status_code, 400)
+            copied_budgets = {
+                item['categoria2']: item['presupuestos_cent']
+                for item in copied_config.get_json()['categorias']
+            }
+            self.assertEqual(copied_budgets['Supermercado'][9], 65000)
+            self.assertEqual(copied_budgets['Supermercado'][10], 72000)
+            self.assertIsNone(copied_budgets['Sin presupuesto'][9])
+            reloaded_budgets = {
+                item['categoria2']: item['presupuestos_cent']
+                for item in reloaded_config.get_json()['categorias']
+            }
+            self.assertEqual(reloaded_budgets['Supermercado'][9], 65000)
+            self.assertEqual(reloaded_budgets['Supermercado'][10], 72000)
 
             report = report_response.get_json()
             self.assertEqual(report['groups'][0]['children'][0]['budget_cent'], 65000)
+            self.assertEqual(
+                next_month_report.get_json()['groups'][0]['children'][0]['budget_cent'],
+                72000,
+            )
             self.assertEqual(
                 [group['categoria1'] for group in report['groups']],
                 ['Alimentación'],

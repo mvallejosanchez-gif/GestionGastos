@@ -81,8 +81,12 @@ const balanceHistoryConfigStatus = document.getElementById('balanceHistoryConfig
 const budgetMonth = document.getElementById('budgetMonth');
 const budgetRows = document.getElementById('budgetRows');
 const budgetTotals = document.getElementById('budgetTotals');
+const annualBudgetSummary = document.getElementById('annualBudgetSummary');
+const annualBudgetRows = document.getElementById('annualBudgetRows');
+const annualBudgetTotals = document.getElementById('annualBudgetTotals');
 const budgetBudgetHeader = document.getElementById('budgetBudgetHeader');
 const budgetActualHeader = document.getElementById('budgetActualHeader');
+const budgetConfigYearInput = document.getElementById('budgetConfigYear');
 const budgetMovementCache = new Map();
 const savingsRows = document.getElementById('savingsRows');
 const savingsChartCanvas = document.getElementById('savingsChart');
@@ -1677,15 +1681,17 @@ function createAccountVisibilityCell(account, field, label) {
 
 async function loadAccountConfig() {
   accountConfigStatus.textContent = '';
+  const budgetYear = Number(budgetConfigYearInput.value) || new Date().getFullYear();
+  budgetConfigYearInput.value = String(budgetYear);
   const [data, , budgetData] = await Promise.all([
     fetchJson('/api/config/cuentas'),
     loadSavingsProjectionConfig(),
-    fetchJson('/api/config/presupuestos'),
+    fetchJson(`/api/config/presupuestos?year=${budgetYear}`),
   ]);
   balanceHistoryMonthsInput.value = String(data.meses_saldo_historico || 18);
   savedBalanceHistoryMonths = balanceHistoryMonthsInput.value;
   balanceHistoryConfigStatus.textContent = '';
-  renderBudgetConfig(budgetData.categorias);
+  renderBudgetConfig(budgetData);
   accountConfigBody.replaceChildren();
 
   if (!data.cuentas.length) {
@@ -1757,13 +1763,18 @@ async function loadAccountConfig() {
   });
 }
 
-function renderBudgetConfig(categories) {
+const budgetMonthLabels = [
+  'Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun',
+  'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic',
+];
+
+function renderBudgetConfig(data) {
   budgetConfigBody.replaceChildren();
   budgetConfigStatus.textContent = '';
-  if (!categories.length) {
+  if (!data.categorias.length) {
     const row = document.createElement('tr');
     const cell = document.createElement('td');
-    cell.colSpan = 3;
+    cell.colSpan = 14;
     cell.className = 'empty';
     cell.textContent = 'No hay categorías de gasto configuradas.';
     row.appendChild(cell);
@@ -1771,70 +1782,119 @@ function renderBudgetConfig(categories) {
     return;
   }
 
-  categories.forEach((category) => {
+  data.categorias.forEach((category) => {
     const row = document.createElement('tr');
     const groupCell = document.createElement('td');
     groupCell.textContent = category.categoria1;
     const categoryCell = document.createElement('td');
     categoryCell.textContent = category.categoria2;
-    const amountCell = document.createElement('td');
-    const currencyInput = document.createElement('span');
-    currencyInput.className = 'currency-input';
-    const amountInput = document.createElement('input');
-    amountInput.type = 'text';
-    amountInput.inputMode = 'decimal';
-    amountInput.className = 'budget-config-amount';
-    amountInput.value = category.presupuesto_cent === null
-      ? ''
-      : formatEuroInputFromCents(category.presupuesto_cent);
-    amountInput.setAttribute('aria-label', `Presupuesto mensual para ${category.categoria2}`);
-    const currencySymbol = document.createElement('span');
-    currencySymbol.className = 'currency-symbol';
-    currencySymbol.textContent = '€';
-    currencySymbol.setAttribute('aria-hidden', 'true');
-    currencyInput.append(amountInput, currencySymbol);
-    amountCell.appendChild(currencyInput);
-    row.append(groupCell, categoryCell, amountCell);
+    row.append(groupCell, categoryCell);
     budgetConfigBody.appendChild(row);
 
-    let savedAmountCent = category.presupuesto_cent;
-    amountInput.addEventListener('change', async () => {
-      const rawValue = amountInput.value.trim();
-      const amountCent = rawValue ? parseEuroInputToCents(rawValue) : null;
-      if (rawValue && (amountCent === null || amountCent < 0)) {
-        budgetConfigStatus.textContent = `Introduce un presupuesto válido para ${category.categoria2}.`;
-        amountInput.value = savedAmountCent === null
-          ? ''
-          : formatEuroInputFromCents(savedAmountCent);
-        return;
-      }
+    const savedBudgets = [...category.presupuestos_cent];
+    category.presupuestos_cent.forEach((amount, index) => {
+      const amountCell = document.createElement('td');
+      const amountInput = document.createElement('input');
+      amountInput.type = 'text';
+      amountInput.inputMode = 'decimal';
+      amountInput.className = 'budget-config-amount';
+      amountInput.value = amount === null
+        ? ''
+        : formatEuroInputFromCents(amount);
+      amountInput.setAttribute(
+        'aria-label',
+        `Presupuesto de ${category.categoria2} para ${budgetMonthLabels[index]} ${data.anio}`,
+      );
+      amountCell.appendChild(amountInput);
+      row.appendChild(amountCell);
 
-      amountInput.disabled = true;
-      try {
-        const saved = await fetchJson(
-          `/api/config/presupuestos/${encodeURIComponent(category.categoria2)}`,
-          {
-            method: 'PUT',
-            body: JSON.stringify({ presupuesto_cent: amountCent }),
-          },
-        );
-        savedAmountCent = saved.presupuesto_cent;
-        amountInput.value = savedAmountCent === null
-          ? ''
-          : formatEuroInputFromCents(savedAmountCent);
-        budgetConfigStatus.textContent = savedAmountCent === null
-          ? `Presupuesto de ${category.categoria2} eliminado.`
-          : `Presupuesto de ${category.categoria2} guardado.`;
-      } catch (error) {
-        amountInput.value = savedAmountCent === null
-          ? ''
-          : formatEuroInputFromCents(savedAmountCent);
-        budgetConfigStatus.textContent = error.message;
-      } finally {
-        amountInput.disabled = false;
-      }
+      amountInput.addEventListener('change', async () => {
+        const rawValue = amountInput.value.trim();
+        const amountCent = rawValue ? parseEuroInputToCents(rawValue) : null;
+        if (rawValue && (amountCent === null || amountCent < 0)) {
+          budgetConfigStatus.textContent = `Introduce un presupuesto válido para ${category.categoria2}.`;
+          amountInput.value = savedBudgets[index] === null
+            ? ''
+            : formatEuroInputFromCents(savedBudgets[index]);
+          return;
+        }
+
+        amountInput.disabled = true;
+        try {
+          const saved = await fetchJson(
+            `/api/config/presupuestos/${encodeURIComponent(category.categoria2)}`,
+            {
+              method: 'PUT',
+              body: JSON.stringify({
+                anio: data.anio,
+                mes: index + 1,
+                presupuesto_cent: amountCent,
+              }),
+            },
+          );
+          savedBudgets[index] = saved.presupuesto_cent;
+          amountInput.value = saved.presupuesto_cent === null
+            ? ''
+            : formatEuroInputFromCents(saved.presupuesto_cent);
+          budgetConfigStatus.textContent = saved.presupuesto_cent === null
+            ? `Presupuesto de ${category.categoria2} en ${budgetMonthLabels[index]} eliminado.`
+            : `Presupuesto de ${category.categoria2} en ${budgetMonthLabels[index]} guardado.`;
+        } catch (error) {
+          amountInput.value = savedBudgets[index] === null
+            ? ''
+            : formatEuroInputFromCents(savedBudgets[index]);
+          budgetConfigStatus.textContent = error.message;
+        } finally {
+          amountInput.disabled = false;
+        }
+      });
     });
   });
+}
+
+async function changeBudgetConfigYear(offset = 0) {
+  const selectedYear = Number(budgetConfigYearInput.value);
+  const year = selectedYear + offset;
+  if (!Number.isInteger(year) || year < 1900 || year > 2100) {
+    budgetConfigStatus.textContent = 'El año debe estar entre 1900 y 2100.';
+    return;
+  }
+  budgetConfigYearInput.value = String(year);
+  try {
+    const data = await fetchJson(`/api/config/presupuestos?year=${year}`);
+    renderBudgetConfig(data);
+  } catch (error) {
+    budgetConfigStatus.textContent = error.message;
+  }
+}
+
+async function copyBudgetConfigToNextYear() {
+  const sourceYear = Number(budgetConfigYearInput.value);
+  if (!Number.isInteger(sourceYear) || sourceYear < 1900 || sourceYear >= 2100) {
+    budgetConfigStatus.textContent = 'El año debe estar entre 1900 y 2099 para copiarlo al siguiente.';
+    return;
+  }
+  const targetYear = sourceYear + 1;
+  if (!window.confirm(`¿Copiar todos los presupuestos de ${sourceYear} a ${targetYear}? Se reemplazarán los valores que ya existan en ${targetYear}.`)) {
+    return;
+  }
+
+  const copyButton = document.getElementById('copyBudgetConfigNextYear');
+  copyButton.disabled = true;
+  try {
+    const result = await fetchJson('/api/config/presupuestos/copiar', {
+      method: 'POST',
+      body: JSON.stringify({ anio_origen: sourceYear }),
+    });
+    budgetConfigYearInput.value = String(result.anio_destino);
+    const data = await fetchJson(`/api/config/presupuestos?year=${result.anio_destino}`);
+    renderBudgetConfig(data);
+    budgetConfigStatus.textContent = `Presupuestos copiados de ${result.anio_origen} a ${result.anio_destino}.`;
+  } catch (error) {
+    budgetConfigStatus.textContent = error.message;
+  } finally {
+    copyButton.disabled = false;
+  }
 }
 
 let savedBalanceHistoryMonths = '18';
@@ -1948,6 +2008,50 @@ function renderBudgetReport(data) {
   addBudgetMoneyCell(totalRow, data.actual_total_cent);
   addBudgetMoneyCell(totalRow, data.difference_total_cent, true);
   budgetTotals.appendChild(totalRow);
+  renderAnnualBudgetReport(data.annual);
+}
+
+function renderAnnualBudgetReport(data) {
+  annualBudgetSummary.textContent = data.through_month
+    ? `Acumulado de enero a ${formatMonthValue(`${data.year}-${String(data.through_month).padStart(2, '0')}`)}. El mes en curso no se incluye.`
+    : `Todavía no hay meses completos en ${data.year}.`;
+  annualBudgetRows.replaceChildren();
+
+  data.groups.forEach((group) => {
+    const groupRow = document.createElement('tr');
+    groupRow.className = 'budget-group-row';
+    const groupName = document.createElement('td');
+    groupName.textContent = group.categoria1;
+    groupRow.append(groupName, document.createElement('td'));
+    addBudgetMoneyCell(groupRow, group.budget_cent);
+    addBudgetMoneyCell(groupRow, group.actual_cent);
+    addBudgetMoneyCell(groupRow, group.difference_cent, true);
+    annualBudgetRows.appendChild(groupRow);
+
+    group.children.forEach((category) => {
+      const row = document.createElement('tr');
+      row.className = 'budget-detail-row';
+      row.appendChild(document.createElement('td'));
+      const categoryName = document.createElement('td');
+      categoryName.textContent = category.categoria2;
+      row.appendChild(categoryName);
+      addBudgetMoneyCell(row, category.budget_cent);
+      addBudgetMoneyCell(row, category.actual_cent);
+      addBudgetMoneyCell(row, category.difference_cent, true);
+      annualBudgetRows.appendChild(row);
+    });
+  });
+
+  annualBudgetTotals.replaceChildren();
+  const totalRow = document.createElement('tr');
+  totalRow.className = 'budget-grand-total';
+  const totalLabel = document.createElement('td');
+  totalLabel.textContent = 'Total acumulado';
+  totalRow.append(totalLabel, document.createElement('td'));
+  addBudgetMoneyCell(totalRow, data.budget_total_cent);
+  addBudgetMoneyCell(totalRow, data.actual_total_cent);
+  addBudgetMoneyCell(totalRow, data.difference_total_cent, true);
+  annualBudgetTotals.appendChild(totalRow);
 }
 
 function renderBudgetMovementDetails(cell, items) {
@@ -2763,6 +2867,20 @@ tabBudgets.addEventListener('click', () => setActiveView('budgets'));
 tabSavings.addEventListener('click', () => setActiveView('savings'));
 budgetMonth.value = new Date().toISOString().slice(0, 7);
 budgetMonth.addEventListener('change', loadBudgets);
+budgetConfigYearInput.value = String(new Date().getFullYear());
+document.getElementById('budgetConfigPreviousYear').addEventListener(
+  'click',
+  () => changeBudgetConfigYear(-1),
+);
+document.getElementById('budgetConfigNextYear').addEventListener(
+  'click',
+  () => changeBudgetConfigYear(1),
+);
+document.getElementById('copyBudgetConfigNextYear').addEventListener(
+  'click',
+  copyBudgetConfigToNextYear,
+);
+budgetConfigYearInput.addEventListener('change', () => changeBudgetConfigYear());
 savingsProjectionYearsInput.addEventListener('change', saveSavingsProjectionConfig);
 savingsForecastMonthsInput.addEventListener('change', saveSavingsForecastMonths);
 savingsStartDateInput.addEventListener('change', saveSavingsDateRange);
