@@ -11,7 +11,14 @@ from unittest.mock import patch
 import pandas as pd
 
 from AppGastos import AHORRO_AMOUNT_COLUMNS, app, DB_PATH
-from forecast_ahorro import DEFAULT_PARAMS, build_forecast, compute_deviation, monthly_entries
+from forecast_ahorro import (
+    DEFAULT_PARAMS,
+    build_forecast,
+    compute_deviation,
+    interest_income,
+    monthly_entries,
+    normalize_params,
+)
 from importar_input import (
     collect_input_rows,
     import_files,
@@ -1884,12 +1891,17 @@ class GastosAppTests(unittest.TestCase):
 
 class ForecastModelTests(unittest.TestCase):
     PARAMS = json.loads(json.dumps(DEFAULT_PARAMS))
+    PARAMS['intereses']['activo'] = False
+    for _name, _rate in (('peor', 0), ('medio', 4), ('mejor', 7)):
+        PARAMS['escenarios'][_name]['rentabilidades_pct'] = dict.fromkeys(
+            PARAMS['escenarios'][_name]['rentabilidades_pct'], _rate
+        )
 
     def entries(self):
         return [
-            {'date': date(2026, 10, 5), 'rowid': 1, 'total': 40000.0, 'invested': 20000.0},
-            {'date': date(2026, 11, 1), 'rowid': 2, 'total': 1.0, 'invested': 1.0},
-            {'date': date(2026, 11, 2), 'rowid': 3, 'total': 45418.91, 'invested': 25418.91},
+            {'date': date(2026, 10, 5), 'rowid': 1, 'total': 40000.0, 'balances': {'Ahorro Trade Republic': 20000.0}},
+            {'date': date(2026, 11, 1), 'rowid': 2, 'total': 1.0, 'balances': {'Ahorro Trade Republic': 1.0}},
+            {'date': date(2026, 11, 2), 'rowid': 3, 'total': 45418.91, 'balances': {'Ahorro Trade Republic': 25418.91}},
         ]
 
     def forecast(self, months):
@@ -1903,6 +1915,72 @@ class ForecastModelTests(unittest.TestCase):
             forecast = self.forecast(months)
             for name, value in expected.items():
                 self.assertAlmostEqual(forecast['scenarios'][name][-1], value, delta=1)
+
+    def test_interest_income_schedule(self):
+        interests = DEFAULT_PARAMS['intereses']
+        key = lambda year, month: year * 12 + month - 1
+        self.assertEqual(interest_income(key(2026, 12), interests), (0, 0))
+        self.assertEqual(interest_income(key(2027, 1), interests), (75, 0))
+        self.assertEqual(interest_income(key(2027, 4), interests), (325, 0))
+        self.assertEqual(interest_income(key(2027, 10), interests), (325, 10000))
+        self.assertEqual(interest_income(key(2027, 11), interests), (0, 0))
+        self.assertEqual(interest_income(key(2028, 4), interests), (100, 0))
+        self.assertEqual(interest_income(key(2027, 4), {**interests, 'activo': False}), (0, 0))
+
+    def test_interest_adds_to_total_and_yields_at_trade_rate(self):
+        with_interest = json.loads(json.dumps(DEFAULT_PARAMS))
+        off = json.loads(json.dumps(DEFAULT_PARAMS))
+        off['intereses']['activo'] = False
+        rate = (1.015) ** (1 / 12) - 1
+        base = build_forecast(self.entries(), off, 5)['scenarios']['peor']
+        boosted = build_forecast(self.entries(), with_interest, 5)['scenarios']['peor']
+        pool_feb = 75
+        pool_mar = pool_feb * (1 + rate)
+        yields = pool_feb * rate + pool_mar * rate + (pool_mar * (1 + rate)) * rate
+        self.assertAlmostEqual(boosted[-1] - base[-1], 75 + 75 + 250 + yields, places=1)
+        self.assertEqual(boosted[0], base[0])
+
+    def test_maturity_moves_capital_without_changing_total(self):
+        interests_on = json.loads(json.dumps(DEFAULT_PARAMS))
+        interests_on['escenarios']['peor']['rentabilidades_pct']['Ahorro Trade Republic'] = 0
+        off = json.loads(json.dumps(DEFAULT_PARAMS))
+        off['intereses']['activo'] = False
+        off['escenarios']['peor']['rentabilidades_pct']['Ahorro Trade Republic'] = 0
+        months = 11  # hasta oct-2027
+        total_on = build_forecast(self.entries(), interests_on, months)['scenarios']['peor'][-1]
+        total_off = build_forecast(self.entries(), off, months)['scenarios']['peor'][-1]
+        # Bankinter abr+oct 2027 (250 + 250) y PIBANK ene, abr, jul, oct 2027 (4 × 75)
+        self.assertAlmostEqual(total_on - total_off, 500 + 300, places=2)
+
+    def test_saved_params_without_interests_use_defaults(self):
+        legacy = json.loads(json.dumps(DEFAULT_PARAMS))
+        del legacy['intereses']
+        for scenario in legacy['escenarios'].values():
+            scenario['rentabilidad_anual_pct'] = 4
+            scenario['rentabilidad_trade_pct'] = 2.5
+            del scenario['rentabilidades_pct']
+        normalized = normalize_params(legacy, tuple(DEFAULT_PARAMS['cuentas_invertidas']))
+        self.assertEqual(normalized['intereses'], DEFAULT_PARAMS['intereses'])
+        self.assertEqual(normalized['escenarios']['medio']['rentabilidades_pct']['Ahorro Trade Republic'], 2.5)
+        self.assertEqual(normalized['escenarios']['medio']['rentabilidades_pct']['Trade Wallet'], 4)
+
+    def test_existing_trade_balance_earns_trade_rate(self):
+        params = json.loads(json.dumps(DEFAULT_PARAMS))
+        params['intereses']['bankinter']['saldo'] = 0
+        params['intereses']['pibank']['capital'] = 0
+        params['aportacion_invertida_mensual'] = 0
+        params['ahorro_base_mensual'] = 0
+        params['pagas_extra'] = {}
+        for scenario in params['escenarios'].values():
+            scenario.update(variable_enero=0, gasto_extra_mensual=0)
+            scenario['rentabilidades_pct'] = dict.fromkeys(scenario['rentabilidades_pct'], 0)
+            scenario['rentabilidades_pct']['Ahorro Trade Republic'] = 2.5
+        entries = [{
+            'date': date(2026, 11, 2), 'rowid': 1, 'total': 10000.0,
+            'balances': {'Ahorro Trade Republic': 6000.0, 'UBS Acciones': 4000.0},
+        }]
+        result = build_forecast(entries, params, 12)['scenarios']['medio'][-1]
+        self.assertAlmostEqual(result, 10000 + 6000 * 0.025, places=1)
 
     def test_worst_case_closed_form_and_months(self):
         forecast = self.forecast(36)
@@ -1927,8 +2005,8 @@ class ForecastModelTests(unittest.TestCase):
 
     def test_monthly_entries_skip_missing_months(self):
         monthly = monthly_entries([
-            {'date': date(2026, 8, 1), 'rowid': 1, 'total': 1, 'invested': 0},
-            {'date': date(2026, 10, 1), 'rowid': 2, 'total': 2, 'invested': 0},
+            {'date': date(2026, 8, 1), 'rowid': 1, 'total': 1, 'balances': {}},
+            {'date': date(2026, 10, 1), 'rowid': 2, 'total': 2, 'balances': {}},
         ])
         self.assertEqual([entry['rowid'] for entry in monthly], [1, 2])
 
@@ -1945,12 +2023,12 @@ class ForecastModelTests(unittest.TestCase):
             },
         }
         entries = [
-            {'date': date(2026, 11, 2), 'rowid': 1, 'total': 5, 'invested': 0},
-            {'date': date(2026, 12, 10), 'rowid': 2, 'total': 250, 'invested': 0},
-            {'date': date(2026, 12, 20), 'rowid': 3, 'total': 220, 'invested': 0},
-            {'date': date(2027, 2, 1), 'rowid': 4, 'total': 100, 'invested': 0},
-            {'date': date(2027, 3, 1), 'rowid': 5, 'total': 400, 'invested': 0},
-            {'date': date(2027, 6, 1), 'rowid': 6, 'total': 999, 'invested': 0},
+            {'date': date(2026, 11, 2), 'rowid': 1, 'total': 5, 'balances': {}},
+            {'date': date(2026, 12, 10), 'rowid': 2, 'total': 250, 'balances': {}},
+            {'date': date(2026, 12, 20), 'rowid': 3, 'total': 220, 'balances': {}},
+            {'date': date(2027, 2, 1), 'rowid': 4, 'total': 100, 'balances': {}},
+            {'date': date(2027, 3, 1), 'rowid': 5, 'total': 400, 'balances': {}},
+            {'date': date(2027, 6, 1), 'rowid': 6, 'total': 999, 'balances': {}},
         ]
         result = compute_deviation(entries, snapshot)
         rows = result['rows']
@@ -2021,7 +2099,7 @@ class ForecastApiTests(unittest.TestCase):
             conn.close()
             with patch('AppGastos.DB_PATH', db_path):
                 params = self.client.get('/api/ahorro/prevision').get_json()['parametros']
-                params['escenarios']['medio']['rentabilidad_anual_pct'] = 5
+                params['escenarios']['medio']['rentabilidades_pct']['UBS Acciones'] = 5
                 saved = self.client.put('/api/ahorro/prevision/parametros', json=params)
                 params['cuentas_invertidas'] = ['Desconocida']
                 invalid = self.client.put('/api/ahorro/prevision/parametros', json=params)
@@ -2029,7 +2107,7 @@ class ForecastApiTests(unittest.TestCase):
 
         self.assertEqual(saved.status_code, 200)
         self.assertEqual(invalid.status_code, 400)
-        self.assertEqual(reloaded['escenarios']['medio']['rentabilidad_anual_pct'], 5)
+        self.assertEqual(reloaded['escenarios']['medio']['rentabilidades_pct']['UBS Acciones'], 5)
 
 
 if __name__ == '__main__':

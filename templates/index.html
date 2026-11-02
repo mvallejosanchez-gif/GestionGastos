@@ -306,20 +306,22 @@
               Hasta
               <input id="savingsEndDate" type="date" />
             </label>
+            <div class="savings-forecast-controls">
+              <div class="savings-forecast-row">
+                <button id="freezeSavingsForecast" class="primary" type="button">Congelar previsión</button>
+                <label class="field-group" for="savingsSnapshotSelect">
+                  Previsión congelada
+                  <select id="savingsSnapshotSelect"></select>
+                </label>
+              </div>
+              <p id="savingsFreezeReminder" class="savings-freeze-reminder" role="status" aria-live="polite" hidden>Recuerda volver a congelar la previsión en enero.</p>
+              <label class="checkbox-label">
+                <input id="savingsShowRecalculated" type="checkbox" />
+                Mostrar forecast recalculado
+              </label>
+            </div>
           </div>
           <p id="savingsDateRangeStatus" class="import-summary" role="status" aria-live="polite"></p>
-          <div class="savings-forecast-controls">
-            <button id="freezeSavingsForecast" class="primary" type="button">Congelar previsión</button>
-            <label class="field-group" for="savingsSnapshotSelect">
-              Previsión congelada
-              <select id="savingsSnapshotSelect"></select>
-            </label>
-            <label class="checkbox-label">
-              <input id="savingsShowRecalculated" type="checkbox" />
-              Mostrar forecast recalculado con el último dato
-            </label>
-          </div>
-          <p id="savingsFreezeReminder" class="import-summary" role="status" aria-live="polite">Recuerda volver a congelar la previsión cada enero.</p>
           <div class="savings-chart-wrap">
             <canvas id="savingsChart" aria-label="Evolución y extrapolación del ahorro"></canvas>
           </div>
@@ -524,7 +526,7 @@
         </details>
         <details class="panel balance-config-panel config-card">
           <summary class="config-card-summary"><h2>Previsión de ahorro</h2></summary>
-          <p class="muted">Parámetros de los escenarios peor, medio y mejor. La rentabilidad se expresa en % anual; la aportación invertida es un traspaso a inversión y no aumenta el total por sí sola.</p>
+          <p class="muted">Parámetros de los escenarios peor, medio y mejor. La rentabilidad de cada cuenta se expresa en % anual; la aportación invertida (a Trade Wallet) es un traspaso a inversión y no aumenta el total por sí sola. Las columnas de rentabilidad salen de las cuentas invertidas marcadas (guarda para actualizarlas).</p>
           <div class="balance-config-controls">
             <label class="field-group" for="savingsProjectionYears">
               Horizonte (años)
@@ -547,11 +549,53 @@
           </div>
           <h3>Cuentas invertidas</h3>
           <div id="forecastInvestedAccounts" class="savings-columns-config"></div>
+          <h3>Intereses de Bankinter y PIBANK</h3>
+          <p class="muted">Los intereses se cobran, se traspasan a Trade y rinden con la rentabilidad de Trade Republic de cada escenario. Aumentan el total solo por el interés; el capital de PIBANK al vencer solo cambia de cuenta.</p>
+          <label class="checkbox-label">
+            <input id="forecastInterestActive" type="checkbox" />
+            Incluir intereses en la previsión
+          </label>
+          <div class="balance-config-controls">
+            <label class="field-group" for="forecastBankinterBalance">
+              Bankinter: saldo con intereses (€)
+              <input id="forecastBankinterBalance" type="number" step="any" min="0" />
+            </label>
+            <label class="field-group" for="forecastBankinterInitialRate">
+              Bankinter: tipo inicial (%)
+              <input id="forecastBankinterInitialRate" type="number" step="any" min="0" />
+            </label>
+            <label class="field-group" for="forecastBankinterInitialEnd">
+              Bankinter: último mes del tipo inicial
+              <input id="forecastBankinterInitialEnd" type="month" />
+            </label>
+            <label class="field-group" for="forecastBankinterLaterRate">
+              Bankinter: tipo posterior (%)
+              <input id="forecastBankinterLaterRate" type="number" step="any" min="0" />
+            </label>
+            <label class="field-group" for="forecastBankinterMonths">
+              Bankinter: meses de cobro
+              <input id="forecastBankinterMonths" type="text" placeholder="4, 10" />
+            </label>
+          </div>
+          <div class="balance-config-controls">
+            <label class="field-group" for="forecastPibankCapital">
+              PIBANK: capital a plazo (€)
+              <input id="forecastPibankCapital" type="number" step="any" min="0" />
+            </label>
+            <label class="field-group" for="forecastPibankRate">
+              PIBANK: tipo (%)
+              <input id="forecastPibankRate" type="number" step="any" min="0" />
+            </label>
+            <label class="field-group" for="forecastPibankMaturity">
+              PIBANK: vencimiento
+              <input id="forecastPibankMaturity" type="month" />
+            </label>
+          </div>
           <h3>Escenarios</h3>
           <div class="table-wrap">
             <table class="forecast-scenarios-table">
               <thead>
-                <tr><th>Escenario</th><th>Variable enero (€)</th><th>Gasto extra mensual (€)</th><th>Rentabilidad anual (%)</th></tr>
+                <tr id="forecastScenarioHead"></tr>
               </thead>
               <tbody id="forecastScenarioRows"></tbody>
             </table>

@@ -120,6 +120,18 @@ const forecastInvestedMonthlyInput = document.getElementById('forecastInvestedMo
 const forecastExtraPaysInput = document.getElementById('forecastExtraPays');
 const forecastInvestedAccounts = document.getElementById('forecastInvestedAccounts');
 const forecastScenarioRows = document.getElementById('forecastScenarioRows');
+const forecastScenarioHead = document.getElementById('forecastScenarioHead');
+const forecastInterestInputs = {
+  active: document.getElementById('forecastInterestActive'),
+  bankinterBalance: document.getElementById('forecastBankinterBalance'),
+  bankinterInitialRate: document.getElementById('forecastBankinterInitialRate'),
+  bankinterInitialEnd: document.getElementById('forecastBankinterInitialEnd'),
+  bankinterLaterRate: document.getElementById('forecastBankinterLaterRate'),
+  bankinterMonths: document.getElementById('forecastBankinterMonths'),
+  pibankCapital: document.getElementById('forecastPibankCapital'),
+  pibankRate: document.getElementById('forecastPibankRate'),
+  pibankMaturity: document.getElementById('forecastPibankMaturity'),
+};
 const savingsModalColumnsConfig = document.getElementById('savingsModalColumnsConfig');
 const savingsColumnsConfigStatus = document.getElementById('savingsColumnsConfigStatus');
 const exportSavingsExcelBtn = document.getElementById('exportSavingsExcel');
@@ -2528,6 +2540,7 @@ function renderSavingsChart() {
       interaction: { mode: 'index', intersect: false },
       plugins: {
         tooltip: {
+          itemSort: (left, right) => (right.parsed.y ?? 0) - (left.parsed.y ?? 0),
           callbacks: {
             label: (context) => `${context.dataset.label}: ${formatSavingsAmount(context.parsed.y)}`,
           },
@@ -2571,10 +2584,7 @@ function renderSavingsFreezeControls() {
     option.selected = photo.id === savingsForecast.foto_activa?.id;
     savingsSnapshotSelect.appendChild(option);
   });
-  const currentYear = new Date().getFullYear();
-  const hasCurrentYear = photos.length && Number(photos[0].fecha_congelacion.slice(0, 4)) === currentYear;
-  savingsFreezeReminder.textContent = 'Recuerda volver a congelar la previsión cada enero.'
-    + (hasCurrentYear ? '' : ` Todavía no hay una previsión congelada en ${currentYear}.`);
+  savingsFreezeReminder.hidden = new Date().getMonth() !== 0;
 }
 
 function renderSavingsDeviation() {
@@ -2630,20 +2640,43 @@ function renderForecastParamsForm() {
     label.append(input, ` ${column}`);
     forecastInvestedAccounts.appendChild(label);
   });
+  const interests = params.intereses;
+  forecastInterestInputs.active.checked = interests.activo;
+  forecastInterestInputs.bankinterBalance.value = interests.bankinter.saldo;
+  forecastInterestInputs.bankinterInitialRate.value = interests.bankinter.tipo_inicial_pct;
+  forecastInterestInputs.bankinterInitialEnd.value = interests.bankinter.ultimo_mes_tipo_inicial;
+  forecastInterestInputs.bankinterLaterRate.value = interests.bankinter.tipo_posterior_pct;
+  forecastInterestInputs.bankinterMonths.value = interests.bankinter.meses_pago.join(', ');
+  forecastInterestInputs.pibankCapital.value = interests.pibank.capital;
+  forecastInterestInputs.pibankRate.value = interests.pibank.tipo_pct;
+  forecastInterestInputs.pibankMaturity.value = interests.pibank.vencimiento;
+  const rateAccounts = Object.keys(params.escenarios.peor.rentabilidades_pct);
+  forecastScenarioHead.replaceChildren();
+  ['Escenario', 'Variable enero (€)', 'Gasto extra mensual (€)', ...rateAccounts.map((account) => `Rent. ${account} (%)`)]
+    .forEach((text) => {
+      const cell = document.createElement('th');
+      cell.textContent = text;
+      forecastScenarioHead.appendChild(cell);
+    });
   forecastScenarioRows.replaceChildren();
   Object.entries(savingsScenarioStyles).forEach(([name, style]) => {
     const row = document.createElement('tr');
     const title = document.createElement('td');
     title.textContent = style.label;
     row.appendChild(title);
-    ['variable_enero', 'gasto_extra_mensual', 'rentabilidad_anual_pct'].forEach((field) => {
+    const fields = [
+      ['variable_enero', params.escenarios[name].variable_enero],
+      ['gasto_extra_mensual', params.escenarios[name].gasto_extra_mensual],
+      ...rateAccounts.map((account) => [`rate:${account}`, params.escenarios[name].rentabilidades_pct[account]]),
+    ];
+    fields.forEach(([field, value]) => {
       const cell = document.createElement('td');
       const input = document.createElement('input');
       input.type = 'number';
       input.step = 'any';
       input.dataset.scenario = name;
       input.dataset.field = field;
-      input.value = params.escenarios[name][field];
+      input.value = value;
       cell.appendChild(input);
       row.appendChild(cell);
     });
@@ -2671,8 +2704,12 @@ async function saveForecastParams() {
   }
   const scenarios = {};
   forecastScenarioRows.querySelectorAll('input').forEach((input) => {
-    scenarios[input.dataset.scenario] ??= {};
-    scenarios[input.dataset.scenario][input.dataset.field] = Number(input.value);
+    const scenario = scenarios[input.dataset.scenario] ??= { rentabilidades_pct: {} };
+    if (input.dataset.field.startsWith('rate:')) {
+      scenario.rentabilidades_pct[input.dataset.field.slice(5)] = Number(input.value);
+    } else {
+      scenario[input.dataset.field] = Number(input.value);
+    }
   });
   try {
     await fetchJson('/api/ahorro/prevision/parametros', {
@@ -2684,6 +2721,22 @@ async function saveForecastParams() {
         cuentas_invertidas: [...forecastInvestedAccounts.querySelectorAll('input:checked')]
           .map((input) => input.value),
         escenarios: scenarios,
+        intereses: {
+          activo: forecastInterestInputs.active.checked,
+          bankinter: {
+            saldo: Number(forecastInterestInputs.bankinterBalance.value),
+            tipo_inicial_pct: Number(forecastInterestInputs.bankinterInitialRate.value),
+            ultimo_mes_tipo_inicial: forecastInterestInputs.bankinterInitialEnd.value,
+            tipo_posterior_pct: Number(forecastInterestInputs.bankinterLaterRate.value),
+            meses_pago: forecastInterestInputs.bankinterMonths.value
+              .split(',').map((item) => Number(item.trim())).filter((item) => item),
+          },
+          pibank: {
+            capital: Number(forecastInterestInputs.pibankCapital.value),
+            tipo_pct: Number(forecastInterestInputs.pibankRate.value),
+            vencimiento: forecastInterestInputs.pibankMaturity.value,
+          },
+        },
       }),
     });
     await fetchSavingsForecast();

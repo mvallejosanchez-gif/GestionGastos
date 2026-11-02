@@ -1,7 +1,7 @@
 """Previsión de ahorro: modelo de escenarios y desviación frente a una previsión congelada.
 
 Las funciones son puras. Reciben entradas normalizadas con las claves
-``date`` (datetime.date), ``rowid``, ``total`` e ``invested`` (ya numéricos).
+``date`` (datetime.date), ``rowid``, ``total`` y ``balances`` (saldo numérico por cuenta).
 """
 from __future__ import annotations
 
@@ -12,15 +12,44 @@ SCENARIOS = ('peor', 'medio', 'mejor')
 
 INVESTED_ACCOUNTS = ('Ahorro Trade Republic', 'Trade Wallet', 'UBS Acciones', 'PPI BBVA')
 
+TRADE_REPUBLIC = 'Ahorro Trade Republic'  # recibe los intereses traspasados
+CONTRIBUTION_ACCOUNT = 'Trade Wallet'  # recibe la aportación invertida mensual
+
+DEFAULT_RATES_PCT = {
+    'peor': {'Ahorro Trade Republic': 1.5, 'Trade Wallet': 0.0, 'UBS Acciones': 0.0, 'PPI BBVA': 0.0},
+    'medio': {'Ahorro Trade Republic': 2.5, 'Trade Wallet': 4.0, 'UBS Acciones': 4.0, 'PPI BBVA': 4.0},
+    'mejor': {'Ahorro Trade Republic': 3.5, 'Trade Wallet': 7.0, 'UBS Acciones': 7.0, 'PPI BBVA': 7.0},
+}
+
 DEFAULT_PARAMS = {
     'ahorro_base_mensual': 300.0,
     'pagas_extra': {'7': 2500.0, '12': 2500.0},
     'aportacion_invertida_mensual': 400.0,
     'cuentas_invertidas': list(INVESTED_ACCOUNTS),
+    'intereses': {
+        'activo': True,
+        'bankinter': {
+            'saldo': 10000.0,
+            'tipo_inicial_pct': 5.0,
+            'ultimo_mes_tipo_inicial': '2027-10',
+            'tipo_posterior_pct': 2.0,
+            'meses_pago': [4, 10],
+        },
+        'pibank': {'capital': 10000.0, 'tipo_pct': 3.0, 'vencimiento': '2027-10'},
+    },
     'escenarios': {
-        'peor': {'variable_enero': 0.0, 'gasto_extra_mensual': 400.0, 'rentabilidad_anual_pct': 0.0},
-        'medio': {'variable_enero': 3000.0, 'gasto_extra_mensual': 201.25, 'rentabilidad_anual_pct': 4.0},
-        'mejor': {'variable_enero': 6000.0, 'gasto_extra_mensual': 100.0, 'rentabilidad_anual_pct': 7.0},
+        'peor': {
+            'variable_enero': 0.0, 'gasto_extra_mensual': 400.0,
+            'rentabilidades_pct': dict(DEFAULT_RATES_PCT['peor']),
+        },
+        'medio': {
+            'variable_enero': 3000.0, 'gasto_extra_mensual': 201.25,
+            'rentabilidades_pct': dict(DEFAULT_RATES_PCT['medio']),
+        },
+        'mejor': {
+            'variable_enero': 6000.0, 'gasto_extra_mensual': 100.0,
+            'rentabilidades_pct': dict(DEFAULT_RATES_PCT['mejor']),
+        },
     },
 }
 
@@ -33,6 +62,11 @@ def month_label(key: int) -> str:
     return f'{key // 12}-{key % 12 + 1:02d}'
 
 
+def label_to_key(label: str) -> int:
+    year, month = str(label).split('-')
+    return int(year) * 12 + int(month) - 1
+
+
 def monthly_entries(entries: list[dict]) -> list[dict]:
     """Último registro de cada mes, ordenado. Los meses sin registro no se rellenan."""
     last_by_month = {}
@@ -41,26 +75,81 @@ def monthly_entries(entries: list[dict]) -> list[dict]:
     return [last_by_month[key] for key in sorted(last_by_month)]
 
 
+def interest_income(key: int, interests: dict) -> tuple[float, float]:
+    """Intereses cobrados en el mes `key` y capital de PIBANK que vence ese mes.
+
+    Todo el cobro se traspasa a Trade: aumenta el total solo por el interés y
+    el capital vencido solo cambia de cuenta.
+    """
+    if not interests.get('activo'):
+        return 0.0, 0.0
+    bankinter = interests['bankinter']
+    income = 0.0
+    if key % 12 + 1 in bankinter['meses_pago']:
+        rate = (
+            bankinter['tipo_inicial_pct']
+            if key <= label_to_key(bankinter['ultimo_mes_tipo_inicial'])
+            else bankinter['tipo_posterior_pct']
+        )
+        income += bankinter['saldo'] * rate / 100 / len(bankinter['meses_pago'])
+
+    pibank = interests['pibank']
+    maturity = label_to_key(pibank['vencimiento'])
+    matured = 0.0
+    if key <= maturity and (maturity - key) % 3 == 0:
+        income += pibank['capital'] * pibank['tipo_pct'] / 100 / 4
+        if key == maturity:
+            matured = pibank['capital']
+    return income, matured
+
+
+def model_accounts(params: dict) -> list[str]:
+    """Cuentas con rendimiento propio: las invertidas más las que reciben traspasos."""
+    accounts = list(params['cuentas_invertidas'])
+    for special in (TRADE_REPUBLIC, CONTRIBUTION_ACCOUNT):
+        if special not in accounts:
+            accounts.append(special)
+    return accounts
+
+
 def project_scenario(
     total0: float,
-    invested0: float,
+    balances0: dict,
     last_key: int,
     params: dict,
     scenario: dict,
     months: int,
 ) -> list[float]:
-    """Total(t) para t = 1..months, empezando el mes siguiente a last_key."""
-    monthly_rate = (1 + scenario['rentabilidad_anual_pct'] / 100) ** (1 / 12) - 1
+    """Total(t) para t = 1..months, empezando el mes siguiente a last_key.
+
+    Cada cuenta invertida rinde con su rentabilidad del escenario. La aportación
+    invertida va a Trade Wallet y los intereses cobrados a Trade Republic; ambos
+    son traspasos y solo el rendimiento y los intereses aumentan el total.
+    """
+    accounts = model_accounts(params)
+    monthly_rates = {
+        account: (1 + scenario['rentabilidades_pct'].get(account, 0) / 100) ** (1 / 12) - 1
+        for account in accounts
+    }
+    balances = {account: balances0.get(account, 0.0) for account in accounts}
+    interests = params.get('intereses', {})
     total = total0
-    invested = invested0
     values = []
     for step in range(1, months + 1):
-        calendar_month = (last_key + step) % 12 + 1
+        key = last_key + step
+        calendar_month = key % 12 + 1
         recurring = params['ahorro_base_mensual'] + params['pagas_extra'].get(str(calendar_month), 0)
         variable = scenario['variable_enero'] if calendar_month == 1 else 0
-        yield_amount = invested * monthly_rate
-        invested += yield_amount + params['aportacion_invertida_mensual']
-        total += recurring + variable - scenario['gasto_extra_mensual'] + yield_amount
+        yields = {account: balances[account] * monthly_rates[account] for account in accounts}
+        income, matured = interest_income(key, interests)
+        for account in accounts:
+            balances[account] += yields[account]
+        balances[CONTRIBUTION_ACCOUNT] += params['aportacion_invertida_mensual']
+        balances[TRADE_REPUBLIC] += income + matured
+        total += (
+            recurring + variable - scenario['gasto_extra_mensual']
+            + sum(yields.values()) + income
+        )
         values.append(total)
     return values
 
@@ -71,19 +160,20 @@ def build_forecast(entries: list[dict], params: dict, months: int) -> dict | Non
         return None
     last = monthly[-1]
     last_key = month_key(last['date'])
+    balances = last['balances']
     return {
         'base': {
             'month': month_label(last_key),
             'date': last['date'].isoformat(),
             'total': round(last['total'], 2),
-            'invested': round(last['invested'], 2),
+            'invested': round(sum(balances.get(a, 0) for a in params['cuentas_invertidas']), 2),
         },
         'months': [month_label(last_key + step) for step in range(1, months + 1)],
         'scenarios': {
             name: [
                 round(value, 2)
                 for value in project_scenario(
-                    last['total'], last['invested'], last_key,
+                    last['total'], balances, last_key,
                     params, params['escenarios'][name], months,
                 )
             ]
@@ -185,12 +275,66 @@ def normalize_params(raw: dict, balance_columns: tuple[str, ...]) -> dict:
     params['escenarios'] = {}
     for name in SCENARIOS:
         scenario = scenarios[name]
-        rate = _number(scenario['rentabilidad_anual_pct'], f'rentabilidad {name}')
-        if rate <= -100:
-            raise ValueError(f'La rentabilidad del escenario {name} debe ser mayor que -100 %')
+        legacy_general = scenario.get('rentabilidad_anual_pct')
+        rates = scenario.get('rentabilidades_pct') or {}
+        if not isinstance(rates, dict):
+            raise ValueError(f'«rentabilidades_pct» del escenario {name} debe ser un objeto')
+        normalized_rates = {}
+        for account in model_accounts(params):
+            if account in rates:
+                value = rates[account]
+            elif account == TRADE_REPUBLIC and 'rentabilidad_trade_pct' in scenario:
+                value = scenario['rentabilidad_trade_pct']
+            elif legacy_general is not None and account != TRADE_REPUBLIC:
+                value = legacy_general
+            else:
+                value = DEFAULT_RATES_PCT[name].get(account, 0.0)
+            rate = _number(value, f'rentabilidad {account} ({name})')
+            if rate <= -100:
+                raise ValueError(f'La rentabilidad de {account} ({name}) debe ser mayor que -100 %')
+            normalized_rates[account] = rate
         params['escenarios'][name] = {
             'variable_enero': _number(scenario['variable_enero'], f'variable_enero {name}'),
             'gasto_extra_mensual': _number(scenario['gasto_extra_mensual'], f'gasto_extra_mensual {name}'),
-            'rentabilidad_anual_pct': rate,
+            'rentabilidades_pct': normalized_rates,
         }
+    params['intereses'] = _normalize_interests(raw.get('intereses', DEFAULT_PARAMS['intereses']))
     return params
+
+
+def _month_label(value, label: str) -> str:
+    try:
+        return month_label(label_to_key(value))
+    except (TypeError, ValueError):
+        raise ValueError(f'«{label}» debe tener el formato AAAA-MM') from None
+
+
+def _normalize_interests(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raise ValueError('«intereses» debe ser un objeto')
+    bankinter = raw['bankinter']
+    payment_months = bankinter['meses_pago']
+    if (
+        not isinstance(payment_months, list)
+        or not payment_months
+        or any(not isinstance(m, int) or not 1 <= m <= 12 for m in payment_months)
+    ):
+        raise ValueError('Los meses de pago de Bankinter deben estar entre 1 y 12')
+    pibank = raw['pibank']
+    return {
+        'activo': bool(raw.get('activo', True)),
+        'bankinter': {
+            'saldo': _number(bankinter['saldo'], 'saldo Bankinter', 0),
+            'tipo_inicial_pct': _number(bankinter['tipo_inicial_pct'], 'tipo inicial Bankinter', 0),
+            'ultimo_mes_tipo_inicial': _month_label(
+                bankinter['ultimo_mes_tipo_inicial'], 'último mes del tipo inicial'
+            ),
+            'tipo_posterior_pct': _number(bankinter['tipo_posterior_pct'], 'tipo posterior Bankinter', 0),
+            'meses_pago': sorted(set(payment_months)),
+        },
+        'pibank': {
+            'capital': _number(pibank['capital'], 'capital PIBANK', 0),
+            'tipo_pct': _number(pibank['tipo_pct'], 'tipo PIBANK', 0),
+            'vencimiento': _month_label(pibank['vencimiento'], 'vencimiento PIBANK'),
+        },
+    }

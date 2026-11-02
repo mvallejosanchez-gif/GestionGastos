@@ -843,16 +843,45 @@ tbody tr:hover {
 
 .savings-forecast-controls {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.savings-forecast-row {
+  display: flex;
+  flex-wrap: nowrap;
   gap: 12px;
   align-items: end;
-  margin-top: 12px;
+}
+
+.savings-forecast-row .field-group {
+  min-width: 0;
+  width: 200px;
+}
+
+.savings-forecast-row select {
+  width: 100%;
+}
+
+.savings-forecast-row button {
+  flex: none;
+  white-space: nowrap;
+  height: 42px;
+}
+
+.savings-freeze-reminder {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--muted);
 }
 
 .savings-forecast-controls .checkbox-label {
   display: flex;
   gap: 6px;
   align-items: center;
+  white-space: nowrap;
 }
 
 .savings-deviation-section {

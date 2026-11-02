@@ -544,13 +544,16 @@ def get_forecast_params(conn: sqlite3.Connection) -> dict:
     return {**json.loads(json.dumps(params)), 'horizonte_anios': years}
 
 
-def get_ahorro_entries(conn: sqlite3.Connection, invested_columns: list[str]) -> list[dict]:
+def get_ahorro_entries(conn: sqlite3.Connection) -> list[dict]:
     return [
         {
             'date': parse_ahorro_date(record['Mes']),
             'rowid': record['rowid'],
             'total': record['Ahorro Total'],
-            'invested': sum(parse_ahorro_amount(record[column]) or 0 for column in invested_columns),
+            'balances': {
+                column: parse_ahorro_amount(record[column]) or 0
+                for column in AHORRO_BALANCE_COLUMNS
+            },
         }
         for record in get_ahorro_records(conn)
     ]
@@ -572,7 +575,7 @@ def api_ahorro_prevision():
     conn = get_db()
     try:
         params = get_forecast_params(conn)
-        entries = get_ahorro_entries(conn, params['cuentas_invertidas'])
+        entries = get_ahorro_entries(conn)
         ensure_forecast_snapshot_table(conn)
         rows = conn.execute(
             'SELECT * FROM ahorro_previsiones_congeladas ORDER BY id DESC'
@@ -623,7 +626,7 @@ def api_freeze_ahorro_prevision():
     conn = get_db()
     try:
         params = get_forecast_params(conn)
-        entries = get_ahorro_entries(conn, params['cuentas_invertidas'])
+        entries = get_ahorro_entries(conn)
         forecast = build_forecast(entries, params, params['horizonte_anios'] * 12)
         if forecast is None:
             return jsonify({'error': 'No hay registros de ahorro para congelar la previsión'}), 400
