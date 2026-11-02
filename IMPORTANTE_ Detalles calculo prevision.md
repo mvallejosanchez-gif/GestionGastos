@@ -68,8 +68,8 @@ Para cada mes `t`:
 
 No suman al total: la aportación invertida ni el capital vencido de PIBANK (solo cambian de cuenta).
 
-### No modelado (pendiente de decisión)
-- Estacionalidad de gastos (p. ej. más gasto en noviembre/diciembre por regalos de Navidad). Opción ofrecida: gasto extra por mes.
+### Estacionalidad de gastos (decisión del usuario)
+- Los gastos extra de Navidad (noviembre/diciembre, regalos) **se consideran repartidos en el gasto extra mensual**. No se modela gasto estacional por mes; no hace falta añadirlo.
 
 ---
 
