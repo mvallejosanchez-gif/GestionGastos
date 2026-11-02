@@ -95,6 +95,7 @@ const budgetActualHeader = document.getElementById('budgetActualHeader');
 const budgetConfigYearInput = document.getElementById('budgetConfigYear');
 const budgetMovementCache = new Map();
 const savingsRows = document.getElementById('savingsRows');
+const savingsTableHeader = document.getElementById('savingsTableHeader');
 const savingsChartCanvas = document.getElementById('savingsChart');
 const savingsColumnsChartCanvas = document.getElementById('savingsColumnsChart');
 const savingsColumnToggles = document.getElementById('savingsColumnToggles');
@@ -103,14 +104,25 @@ const savingsModal = document.getElementById('savingsModal');
 const savingsForm = document.getElementById('savingsForm');
 const savingsModalTitle = document.getElementById('savingsModalTitle');
 const savingsProjectionYearsInput = document.getElementById('savingsProjectionYears');
-const savingsForecastMonthsInput = document.getElementById('savingsForecastMonths');
 const savingsStartDateInput = document.getElementById('savingsStartDate');
 const savingsEndDateInput = document.getElementById('savingsEndDate');
 const savingsDateRangeStatus = document.getElementById('savingsDateRangeStatus');
 const savingsProjectionConfigStatus = document.getElementById('savingsProjectionConfigStatus');
 const savingsChartColumnsConfig = document.getElementById('savingsChartColumnsConfig');
+const savingsSnapshotSelect = document.getElementById('savingsSnapshotSelect');
+const savingsShowRecalculatedInput = document.getElementById('savingsShowRecalculated');
+const savingsFreezeReminder = document.getElementById('savingsFreezeReminder');
+const savingsDeviationCard = document.getElementById('savingsDeviationCard');
+const savingsDeviationRows = document.getElementById('savingsDeviationRows');
+const freezeSavingsForecastBtn = document.getElementById('freezeSavingsForecast');
+const forecastBaseMonthlyInput = document.getElementById('forecastBaseMonthly');
+const forecastInvestedMonthlyInput = document.getElementById('forecastInvestedMonthly');
+const forecastExtraPaysInput = document.getElementById('forecastExtraPays');
+const forecastInvestedAccounts = document.getElementById('forecastInvestedAccounts');
+const forecastScenarioRows = document.getElementById('forecastScenarioRows');
 const savingsModalColumnsConfig = document.getElementById('savingsModalColumnsConfig');
 const savingsColumnsConfigStatus = document.getElementById('savingsColumnsConfigStatus');
+const exportSavingsExcelBtn = document.getElementById('exportSavingsExcel');
 const importSummaryBadge = document.getElementById('importSummaryBadge');
 const importStatusText = document.getElementById('importStatusText');
 const importTabRows = document.getElementById('importTabRows');
@@ -179,8 +191,9 @@ let editingImportKey = null;
 let savingsChartInstance = null;
 let savingsColumnsChartInstance = null;
 let savingsRecords = [];
+let savingsForecast = null;
+let savingsSelectedSnapshotId = null;
 let savedSavingsProjectionYears = '5';
-let savedSavingsForecastMonths = '12';
 let savedSavingsStartDate = '';
 let savedSavingsEndDate = '';
 const savingsBalanceFields = [
@@ -1223,6 +1236,9 @@ async function confirmImportAndRefresh() {
       importPreviewModal.setAttribute('aria-hidden', 'true');
     }
     resetDashboardDateRange();
+    // El rango previo no incluye las fechas nuevas: pedir el rango completo al servidor.
+    dashboardRange.start = null;
+    dashboardRange.end = null;
     await loadMovimientos();
     await loadSummary();
     await loadDashboard();
@@ -2357,6 +2373,7 @@ const savingsAmountFields = [
   'Ahorro Mensual Previsto',
   'Gasto Extra2',
   'Aportaciones Abuela',
+  'Variable trabajo',
 ];
 const savingsFields = [
   'Mes',
@@ -2401,45 +2418,6 @@ function savingsMonthLabel(date) {
   return date.toLocaleDateString('es-ES', { month: 'short', year: 'numeric', timeZone: 'UTC' });
 }
 
-function getSavingsMonthlyRecords(records) {
-  const monthlyRecords = new Map();
-  records.forEach((record) => {
-    const [day, month, year] = String(record.Mes || '').split('/').map(Number);
-    if (day && month && year) {
-      const monthIndex = year * 12 + month - 1;
-      monthlyRecords.set(monthIndex, record);
-    }
-  });
-  return [...monthlyRecords.entries()].sort(([left], [right]) => left - right);
-}
-
-function getSavingsProjectionMonthlyAverage(records, months) {
-  const monthlyRecords = getSavingsMonthlyRecords(records).slice(-months);
-  const recentForecasts = monthlyRecords
-    .map(([, record]) => parseSavingsAmount(record['Ahorro Mensual Previsto']))
-    .filter((value) => value !== null);
-  if (!recentForecasts.length) return 0;
-  return recentForecasts.reduce((total, value) => total + value, 0) / recentForecasts.length;
-}
-
-function getSavingsTotalMonthlyChange(records, months) {
-  const monthlyRecords = getSavingsMonthlyRecords(records).slice(-months);
-  if (monthlyRecords.length < 2) return 0;
-
-  const monthlyRates = [];
-  for (let index = 1; index < monthlyRecords.length; index += 1) {
-    const [previousMonth, previousRecord] = monthlyRecords[index - 1];
-    const [currentMonth, currentRecord] = monthlyRecords[index];
-    const elapsedMonths = currentMonth - previousMonth;
-    if (!elapsedMonths) continue;
-    const previousTotal = parseSavingsAmount(previousRecord['Ahorro Total']) || 0;
-    const currentTotal = parseSavingsAmount(currentRecord['Ahorro Total']) || 0;
-    monthlyRates.push((currentTotal - previousTotal) / elapsedMonths);
-  }
-  if (!monthlyRates.length) return 0;
-  return monthlyRates.reduce((total, rate) => total + rate, 0) / monthlyRates.length;
-}
-
 function getVisibleSavingsRecords() {
   if (!savedSavingsStartDate) return savingsRecords;
   return savingsRecords.filter((record) => savingsDateForInput(record.Mes) >= savedSavingsStartDate);
@@ -2453,91 +2431,108 @@ function getSavingsGraphRecords() {
   });
 }
 
+const savingsScenarioStyles = {
+  peor: { label: 'Peor', color: '#e53935', dash: [2, 4] },
+  medio: { label: 'Medio', color: '#e67e22', dash: [8, 4] },
+  mejor: { label: 'Mejor', color: '#1ea672', dash: [14, 4, 2, 4] },
+};
+
+function savingsMonthKey(label) {
+  const [year, month] = String(label).split('-').map(Number);
+  return year * 12 + month - 1;
+}
+
+function savingsFutureLabel(key) {
+  return savingsMonthLabel(new Date(Date.UTC(Math.floor(key / 12), key % 12, 1)));
+}
+
 function renderSavingsChart() {
   if (savingsChartInstance) savingsChartInstance.destroy();
   const visibleRecords = getSavingsGraphRecords();
   const labels = visibleRecords.map((record) => record.Mes);
+  const axisKeys = visibleRecords.map((record) => {
+    const [, month, year] = String(record.Mes).split('/').map(Number);
+    return year * 12 + month - 1;
+  });
   const totalValues = visibleRecords.map((record) => {
     const value = Number(record['Ahorro Total']);
     return Number.isFinite(value) ? value : 0;
   });
-  const hypotheticalValues = visibleRecords.map((record) => {
-    const value = Number(record['Ahorro Hipotético']);
-    return Number.isFinite(value) ? value : 0;
-  });
-  const totalForecastValues = visibleRecords.map(() => null);
-  const hypotheticalForecastValues = visibleRecords.map(() => null);
 
-  if (visibleRecords.length) {
-    const lastIndex = visibleRecords.length - 1;
-    const lastRecord = visibleRecords[lastIndex];
-    const windowMonths = Number(savedSavingsForecastMonths);
-    const plannedMonthlySavings = getSavingsProjectionMonthlyAverage(savingsRecords, windowMonths);
-    const totalMonthlyChange = getSavingsTotalMonthlyChange(savingsRecords, windowMonths);
-    let projectedTotal = totalValues[lastIndex];
-    let projectedHypothetical = hypotheticalValues[lastIndex];
-    totalForecastValues[lastIndex] = projectedTotal;
-    hypotheticalForecastValues[lastIndex] = projectedHypothetical;
+  const frozen = savingsForecast?.foto_activa?.valores || null;
+  const recalculated = savingsShowRecalculatedInput.checked ? savingsForecast?.actual : null;
+  const forecasts = [frozen, recalculated].filter(Boolean);
 
-    const [day, month, year] = String(lastRecord.Mes).split('/').map(Number);
-    if (day && month && year) {
-      const monthCount = Number(savedSavingsProjectionYears) * 12;
-      for (let offset = 1; offset <= monthCount; offset += 1) {
-        const futureDate = new Date(Date.UTC(year, month - 1 + offset, 1));
-        projectedTotal += totalMonthlyChange;
-        projectedHypothetical += plannedMonthlySavings;
-        labels.push(savingsMonthLabel(futureDate));
-        totalValues.push(null);
-        hypotheticalValues.push(null);
-        totalForecastValues.push(projectedTotal);
-        hypotheticalForecastValues.push(projectedHypothetical);
-      }
+  if (axisKeys.length && forecasts.length) {
+    const forecastEnd = Math.max(...forecasts.map(
+      (forecast) => savingsMonthKey(forecast.months[forecast.months.length - 1] || forecast.base.month),
+    ));
+    let endKey = forecastEnd;
+    if (savedSavingsEndDate) {
+      const [endYear, endMonth] = savedSavingsEndDate.split('-').map(Number);
+      endKey = endYear * 12 + endMonth - 1;
+    }
+    for (let key = axisKeys[axisKeys.length - 1] + 1; key <= endKey; key += 1) {
+      labels.push(savingsFutureLabel(key));
+      axisKeys.push(key);
+      totalValues.push(null);
     }
   }
 
+  const lastIndexByKey = new Map(axisKeys.map((key, index) => [key, index]));
+  const placeSeries = (forecast, name) => {
+    const data = axisKeys.map(() => null);
+    const points = [
+      [forecast.base.month, forecast.base.total],
+      ...forecast.months.map((month, index) => [month, forecast.scenarios[name][index]]),
+    ];
+    points.forEach(([month, value]) => {
+      const index = lastIndexByKey.get(savingsMonthKey(month));
+      if (index !== undefined) data[index] = value;
+    });
+    return data;
+  };
+  const scenarioDatasets = (forecast, suffix, recalculatedStyle) => ['peor', 'mejor', 'medio'].map((name) => {
+    const style = savingsScenarioStyles[name];
+    return {
+      label: `${style.label} (${suffix})`,
+      data: placeSeries(forecast, name),
+      borderColor: style.color,
+      backgroundColor: name === 'mejor' && !recalculatedStyle ? 'rgba(41, 98, 255, 0.12)' : style.color,
+      borderDash: style.dash,
+      borderWidth: recalculatedStyle ? 1 : 2,
+      pointRadius: 0,
+      spanGaps: true,
+      fill: name === 'mejor' && !recalculatedStyle ? '-1' : false,
+    };
+  });
+
+  const datasets = [
+    {
+      label: 'Ahorro Total',
+      data: totalValues,
+      borderColor: '#2962ff',
+      backgroundColor: '#2962ff',
+      tension: 0.2,
+    },
+    ...(frozen ? scenarioDatasets(frozen, 'congelado', false) : []),
+    ...(recalculated ? scenarioDatasets(recalculated, 'recalculado', true) : []),
+  ];
+
   savingsChartInstance = new Chart(savingsChartCanvas, {
     type: 'line',
-    data: {
-      labels,
-      datasets: [
-        {
-          label: 'Ahorro Total',
-          data: totalValues,
-          borderColor: '#2962ff',
-          backgroundColor: '#2962ff',
-          tension: 0.2,
-        },
-        {
-          label: 'Ahorro Hipotético',
-          data: hypotheticalValues,
-          borderColor: '#1ea672',
-          backgroundColor: '#1ea672',
-          tension: 0.2,
-        },
-        {
-          label: 'Forecast Ahorro Total',
-          data: totalForecastValues,
-          borderColor: '#e67e22',
-          backgroundColor: '#e67e22',
-          borderDash: [6, 4],
-          pointRadius: 2,
-          spanGaps: true,
-        },
-        {
-          label: 'Forecast Ahorro Hipotético',
-          data: hypotheticalForecastValues,
-          borderColor: '#a23be0',
-          backgroundColor: '#a23be0',
-          borderDash: [6, 4],
-          pointRadius: 2,
-          spanGaps: true,
-        },
-      ],
-    },
+    data: { labels, datasets },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       interaction: { mode: 'index', intersect: false },
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (context) => `${context.dataset.label}: ${formatSavingsAmount(context.parsed.y)}`,
+          },
+        },
+      },
       scales: {
         x: { title: { display: true, text: 'Mes' } },
         y: {
@@ -2547,6 +2542,181 @@ function renderSavingsChart() {
       },
     },
   });
+}
+
+function formatSavingsPercent(value) {
+  return value === null || value === undefined
+    ? '—'
+    : `${(value * 100).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} %`;
+}
+
+function formatIsoDate(value) {
+  const [year, month, day] = String(value || '').split('-');
+  return day ? `${day}/${month}/${year}` : '';
+}
+
+function renderSavingsFreezeControls() {
+  const photos = savingsForecast?.fotos || [];
+  savingsSnapshotSelect.replaceChildren();
+  if (!photos.length) {
+    const option = document.createElement('option');
+    option.textContent = 'Sin previsiones congeladas';
+    option.disabled = true;
+    savingsSnapshotSelect.appendChild(option);
+  }
+  photos.forEach((photo) => {
+    const option = document.createElement('option');
+    option.value = String(photo.id);
+    option.textContent = `#${photo.id} — ${formatIsoDate(photo.fecha_congelacion)}`;
+    option.selected = photo.id === savingsForecast.foto_activa?.id;
+    savingsSnapshotSelect.appendChild(option);
+  });
+  const currentYear = new Date().getFullYear();
+  const hasCurrentYear = photos.length && Number(photos[0].fecha_congelacion.slice(0, 4)) === currentYear;
+  savingsFreezeReminder.textContent = 'Recuerda volver a congelar la previsión cada enero.'
+    + (hasCurrentYear ? '' : ` Todavía no hay una previsión congelada en ${currentYear}.`);
+}
+
+function renderSavingsDeviation() {
+  const deviation = savingsForecast?.desviacion;
+  savingsDeviationRows.replaceChildren();
+  if (!deviation || !deviation.rows.length) {
+    savingsDeviationCard.textContent = deviation
+      ? 'Aún no hay registros reales posteriores a la congelación.'
+      : 'Sin previsión congelada.';
+    savingsDeviationCard.classList.add('muted');
+    return;
+  }
+  const latest = deviation.latest;
+  savingsDeviationCard.classList.remove('muted');
+  savingsDeviationCard.textContent = `Último mes (${latest.mes}): ${formatSavingsAmount(latest.desviacion_eur)} `
+    + `(${formatSavingsPercent(latest.desviacion_pct)}) frente al escenario medio · ${latest.estado}`;
+  [...deviation.rows].reverse().forEach((item) => {
+    const row = document.createElement('tr');
+    [
+      item.mes,
+      formatSavingsAmount(item.total_real),
+      formatSavingsAmount(item.total_congelado_medio),
+      formatSavingsAmount(item.desviacion_eur),
+      formatSavingsPercent(item.desviacion_pct),
+      item.estado,
+      formatSavingsAmount(item.media_movil_3m),
+      formatSavingsAmount(item.desviacion_acumulada),
+    ].forEach((value, index) => {
+      const cell = document.createElement('td');
+      cell.textContent = value;
+      if (index !== 0 && index !== 5) cell.className = 'text-right';
+      row.appendChild(cell);
+    });
+    savingsDeviationRows.appendChild(row);
+  });
+}
+
+function renderForecastParamsForm() {
+  const params = savingsForecast?.parametros;
+  if (!params) return;
+  forecastBaseMonthlyInput.value = params.ahorro_base_mensual;
+  forecastInvestedMonthlyInput.value = params.aportacion_invertida_mensual;
+  forecastExtraPaysInput.value = Object.entries(params.pagas_extra)
+    .map(([month, amount]) => `${month}:${amount}`)
+    .join(', ');
+  forecastInvestedAccounts.replaceChildren();
+  savingsBalanceFields.forEach((column) => {
+    const label = document.createElement('label');
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.value = column;
+    input.checked = params.cuentas_invertidas.includes(column);
+    label.append(input, ` ${column}`);
+    forecastInvestedAccounts.appendChild(label);
+  });
+  forecastScenarioRows.replaceChildren();
+  Object.entries(savingsScenarioStyles).forEach(([name, style]) => {
+    const row = document.createElement('tr');
+    const title = document.createElement('td');
+    title.textContent = style.label;
+    row.appendChild(title);
+    ['variable_enero', 'gasto_extra_mensual', 'rentabilidad_anual_pct'].forEach((field) => {
+      const cell = document.createElement('td');
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.step = 'any';
+      input.dataset.scenario = name;
+      input.dataset.field = field;
+      input.value = params.escenarios[name][field];
+      cell.appendChild(input);
+      row.appendChild(cell);
+    });
+    forecastScenarioRows.appendChild(row);
+  });
+}
+
+async function fetchSavingsForecast() {
+  const query = savingsSelectedSnapshotId ? `?snapshot_id=${savingsSelectedSnapshotId}` : '';
+  savingsForecast = await fetchJson(`/api/ahorro/prevision${query}`);
+  renderSavingsFreezeControls();
+  renderSavingsDeviation();
+  renderForecastParamsForm();
+}
+
+async function saveForecastParams() {
+  const pays = {};
+  for (const part of forecastExtraPaysInput.value.split(',').map((item) => item.trim()).filter(Boolean)) {
+    const [month, amount] = part.split(':').map((item) => item.trim());
+    if (!month || amount === undefined || amount === '') {
+      savingsProjectionConfigStatus.textContent = 'Las pagas extra deben tener el formato mes:importe.';
+      return;
+    }
+    pays[month] = Number(amount);
+  }
+  const scenarios = {};
+  forecastScenarioRows.querySelectorAll('input').forEach((input) => {
+    scenarios[input.dataset.scenario] ??= {};
+    scenarios[input.dataset.scenario][input.dataset.field] = Number(input.value);
+  });
+  try {
+    await fetchJson('/api/ahorro/prevision/parametros', {
+      method: 'PUT',
+      body: JSON.stringify({
+        ahorro_base_mensual: Number(forecastBaseMonthlyInput.value),
+        aportacion_invertida_mensual: Number(forecastInvestedMonthlyInput.value),
+        pagas_extra: pays,
+        cuentas_invertidas: [...forecastInvestedAccounts.querySelectorAll('input:checked')]
+          .map((input) => input.value),
+        escenarios: scenarios,
+      }),
+    });
+    await fetchSavingsForecast();
+    savingsProjectionConfigStatus.textContent = 'Parámetros de previsión guardados.';
+    if (activeViewName === 'savings') renderSavingsChart();
+  } catch (error) {
+    savingsProjectionConfigStatus.textContent = error.message;
+  }
+}
+
+async function freezeSavingsForecast() {
+  freezeSavingsForecastBtn.disabled = true;
+  try {
+    await fetchJson('/api/ahorro/prevision/congelar', { method: 'POST' });
+    savingsSelectedSnapshotId = null;
+    await fetchSavingsForecast();
+    renderSavingsChart();
+    savingsStatus.textContent = 'Previsión congelada.';
+  } catch (error) {
+    savingsStatus.textContent = error.message;
+  } finally {
+    freezeSavingsForecastBtn.disabled = false;
+  }
+}
+
+async function selectSavingsSnapshot() {
+  savingsSelectedSnapshotId = Number(savingsSnapshotSelect.value) || null;
+  try {
+    await fetchSavingsForecast();
+    renderSavingsChart();
+  } catch (error) {
+    savingsStatus.textContent = error.message;
+  }
 }
 
 function renderSavingsColumnToggles() {
@@ -2658,11 +2828,18 @@ function applySavingsColumnSettings(config) {
 
 function renderSavingsRows() {
   const visibleRecords = getVisibleSavingsRecords();
+  savingsTableHeader.replaceChildren();
+  ['Mes', 'Ahorro total', ...savedSavingsModalColumns, 'Ahorro mensual previsto', 'Comentarios', 'Acciones']
+    .forEach((label) => {
+      const header = document.createElement('th');
+      header.textContent = label;
+      savingsTableHeader.appendChild(header);
+    });
   savingsRows.replaceChildren();
   if (!visibleRecords.length) {
     const row = document.createElement('tr');
     const cell = document.createElement('td');
-    cell.colSpan = 5;
+    cell.colSpan = 5 + savedSavingsModalColumns.length;
     cell.className = 'empty';
     cell.textContent = savedSavingsStartDate
       ? 'No hay registros de ahorro desde la fecha seleccionada.'
@@ -2677,13 +2854,14 @@ function renderSavingsRows() {
     const values = [
       record.Mes,
       formatSavingsAmount(record['Ahorro Total']),
+      ...savedSavingsModalColumns.map((column) => formatSavingsAmount(record[column])),
       formatSavingsAmount(record['Ahorro Mensual Previsto']),
       record.Comentarios || '—',
     ];
     values.forEach((value, index) => {
       const cell = document.createElement('td');
       cell.textContent = value ?? '';
-      if (index === 1 || index === 2) cell.className = 'savings-amount';
+      if (index > 0 && index < values.length - 1) cell.className = 'savings-amount';
       row.appendChild(cell);
     });
     const actionCell = document.createElement('td');
@@ -2709,15 +2887,14 @@ async function loadSavings() {
       fetchJson('/api/config/ahorro-proyeccion'),
     ]);
     savedSavingsProjectionYears = String(config.anios_proyeccion_ahorro);
-    savedSavingsForecastMonths = String(config.meses_media_forecast_ahorro);
     savedSavingsStartDate = config.fecha_inicio_evolucion_ahorro || '';
     savedSavingsEndDate = config.fecha_fin_evolucion_ahorro || '';
     applySavingsColumnSettings(config);
     savingsProjectionYearsInput.value = savedSavingsProjectionYears;
-    savingsForecastMonthsInput.value = savedSavingsForecastMonths;
     savingsStartDateInput.value = savedSavingsStartDate;
     savingsEndDateInput.value = savedSavingsEndDate;
     savingsRecords = data.rows;
+    await fetchSavingsForecast();
     renderSavingsRows();
     renderSavingsChart();
     renderSavingsColumnsChart();
@@ -2769,11 +2946,11 @@ async function saveSavingsRecord(event) {
   const rowid = savingsForm.elements.namedItem('rowid').value;
   const payload = {};
   savingsFields.forEach((field) => {
+    if (rowid && savingsBalanceFields.includes(field) && !savedSavingsModalColumns.includes(field)) {
+      return;
+    }
     const input = savingsForm.elements.namedItem(field);
-    payload[field] = savingsBalanceFields.includes(field)
-      && !savedSavingsModalColumns.includes(field)
-      ? 0
-      : input.value === ''
+    payload[field] = input.value === ''
       ? null
       : savingsAmountFields.includes(field)
         ? Number(input.value)
@@ -2800,15 +2977,14 @@ async function saveSavingsRecord(event) {
 async function loadSavingsProjectionConfig() {
   const data = await fetchJson('/api/config/ahorro-proyeccion');
   savedSavingsProjectionYears = String(data.anios_proyeccion_ahorro);
-  savedSavingsForecastMonths = String(data.meses_media_forecast_ahorro);
   savedSavingsStartDate = data.fecha_inicio_evolucion_ahorro || '';
   savedSavingsEndDate = data.fecha_fin_evolucion_ahorro || '';
   applySavingsColumnSettings(data);
   savingsProjectionYearsInput.value = savedSavingsProjectionYears;
-  savingsForecastMonthsInput.value = savedSavingsForecastMonths;
   savingsStartDateInput.value = savedSavingsStartDate;
   savingsEndDateInput.value = savedSavingsEndDate;
   savingsDateRangeStatus.textContent = '';
+  await fetchSavingsForecast().catch(() => {});
 }
 
 async function saveSavingsProjectionConfig() {
@@ -2826,33 +3002,11 @@ async function saveSavingsProjectionConfig() {
     });
     savedSavingsProjectionYears = String(result.anios_proyeccion_ahorro);
     savingsProjectionYearsInput.value = savedSavingsProjectionYears;
-    savingsProjectionConfigStatus.textContent = `Proyección actualizada: ${result.anios_proyeccion_ahorro} años.`;
+    savingsProjectionConfigStatus.textContent = `Horizonte actualizado: ${result.anios_proyeccion_ahorro} años.`;
+    await fetchSavingsForecast();
     if (activeViewName === 'savings') renderSavingsChart();
   } catch (error) {
     savingsProjectionYearsInput.value = savedSavingsProjectionYears;
-    savingsProjectionConfigStatus.textContent = error.message;
-  }
-}
-
-async function saveSavingsForecastMonths() {
-  const months = Number(savingsForecastMonthsInput.value);
-  if (!Number.isInteger(months) || months < 1 || months > 120) {
-    savingsProjectionConfigStatus.textContent = 'Elige una ventana entre 1 y 120 meses.';
-    savingsForecastMonthsInput.value = savedSavingsForecastMonths;
-    return;
-  }
-
-  try {
-    const result = await fetchJson('/api/config/ahorro-proyeccion', {
-      method: 'PUT',
-      body: JSON.stringify({ meses_media_forecast_ahorro: months }),
-    });
-    savedSavingsForecastMonths = String(result.meses_media_forecast_ahorro);
-    savingsForecastMonthsInput.value = savedSavingsForecastMonths;
-    savingsProjectionConfigStatus.textContent = `Ventana del forecast actualizada: ${result.meses_media_forecast_ahorro} meses.`;
-    if (activeViewName === 'savings') renderSavingsChart();
-  } catch (error) {
-    savingsForecastMonthsInput.value = savedSavingsForecastMonths;
     savingsProjectionConfigStatus.textContent = error.message;
   }
 }
@@ -2908,6 +3062,7 @@ async function saveSavingsColumnSettings() {
       }),
     });
     applySavingsColumnSettings(result);
+    renderSavingsRows();
     renderSavingsColumnsChart();
     savingsColumnsConfigStatus.textContent = 'Columnas de ahorro actualizadas.';
   } catch (error) {
@@ -3069,10 +3224,16 @@ document.getElementById('copyBudgetConfigNextYear').addEventListener(
 );
 budgetConfigYearInput.addEventListener('change', () => changeBudgetConfigYear());
 savingsProjectionYearsInput.addEventListener('change', saveSavingsProjectionConfig);
-savingsForecastMonthsInput.addEventListener('change', saveSavingsForecastMonths);
+document.getElementById('saveForecastParams').addEventListener('click', saveForecastParams);
+freezeSavingsForecastBtn.addEventListener('click', freezeSavingsForecast);
+savingsSnapshotSelect.addEventListener('change', selectSavingsSnapshot);
+savingsShowRecalculatedInput.addEventListener('change', renderSavingsChart);
 savingsStartDateInput.addEventListener('change', saveSavingsDateRange);
 savingsEndDateInput.addEventListener('change', saveSavingsDateRange);
 document.getElementById('saveSavingsColumnsConfig').addEventListener('click', saveSavingsColumnSettings);
+exportSavingsExcelBtn.addEventListener('click', () => {
+  window.location.href = '/api/ahorro/export';
+});
 document.getElementById('addSavingsRecord').addEventListener('click', () => openSavingsModal());
 savingsForm.addEventListener('submit', saveSavingsRecord);
 document.getElementById('closeSavingsModal').addEventListener('click', closeSavingsModal);

@@ -294,7 +294,7 @@
           <div class="table-toolbar">
             <div>
               <h2>Evolución del ahorro</h2>
-              <p class="muted">El forecast de ahorro hipotético usa la previsión mensual media; el de ahorro total, el incremento mensual medio. Ambos se calculan con la ventana histórica configurada.</p>
+              <p class="muted">Tres escenarios (peor, medio, mejor) calculados a partir del último ahorro real. Congela la previsión para medir desviaciones.</p>
             </div>
           </div>
           <div class="savings-date-range" aria-label="Rango de fechas para las gráficas de ahorro">
@@ -308,10 +308,43 @@
             </label>
           </div>
           <p id="savingsDateRangeStatus" class="import-summary" role="status" aria-live="polite"></p>
+          <div class="savings-forecast-controls">
+            <button id="freezeSavingsForecast" class="primary" type="button">Congelar previsión</button>
+            <label class="field-group" for="savingsSnapshotSelect">
+              Previsión congelada
+              <select id="savingsSnapshotSelect"></select>
+            </label>
+            <label class="checkbox-label">
+              <input id="savingsShowRecalculated" type="checkbox" />
+              Mostrar forecast recalculado con el último dato
+            </label>
+          </div>
+          <p id="savingsFreezeReminder" class="import-summary" role="status" aria-live="polite">Recuerda volver a congelar la previsión cada enero.</p>
           <div class="savings-chart-wrap">
             <canvas id="savingsChart" aria-label="Evolución y extrapolación del ahorro"></canvas>
           </div>
           <p id="savingsStatus" class="import-summary" role="status" aria-live="polite"></p>
+          <div class="savings-deviation-section">
+            <h3>Desviación frente a la previsión congelada</h3>
+            <div id="savingsDeviationCard" class="savings-deviation-card muted">Sin previsión congelada.</div>
+            <div class="table-wrap">
+              <table class="savings-deviation-table">
+                <thead>
+                  <tr>
+                    <th>Mes</th>
+                    <th class="text-right">Total real</th>
+                    <th class="text-right">Congelado medio</th>
+                    <th class="text-right">Desviación (€)</th>
+                    <th class="text-right">Desviación (%)</th>
+                    <th>Estado</th>
+                    <th class="text-right">Media móvil 3m</th>
+                    <th class="text-right">Acumulada</th>
+                  </tr>
+                </thead>
+                <tbody id="savingsDeviationRows"></tbody>
+              </table>
+            </div>
+          </div>
           <div class="savings-columns-chart-section">
             <h3>Ahorro por columna</h3>
             <p class="muted">Evolución mensual apilada de los saldos individuales seleccionados en Configuración.</p>
@@ -324,12 +357,15 @@
         <section class="panel table-panel savings-records-panel">
           <div class="table-toolbar">
             <h2>Registros</h2>
-            <button id="addSavingsRecord" class="primary" type="button">+ Añadir registro</button>
+            <div class="toolbar-actions">
+              <button id="exportSavingsExcel" class="secondary" type="button">Descargar Excel</button>
+              <button id="addSavingsRecord" class="primary" type="button">+ Añadir registro</button>
+            </div>
           </div>
           <div class="table-wrap">
             <table class="savings-records-table">
               <thead>
-                <tr>
+                <tr id="savingsTableHeader">
                   <th>Mes</th>
                   <th>Ahorro total</th>
                   <th>Ahorro mensual previsto</th>
@@ -487,23 +523,45 @@
           <p id="balanceHistoryConfigStatus" class="import-summary" role="status"></p>
         </details>
         <details class="panel balance-config-panel config-card">
-          <summary class="config-card-summary"><h2>Extrapolación del ahorro</h2></summary>
-          <p class="muted">Configura la ventana histórica para calcular las tasas mensuales y los años que se mostrarán como forecast.</p>
+          <summary class="config-card-summary"><h2>Previsión de ahorro</h2></summary>
+          <p class="muted">Parámetros de los escenarios peor, medio y mejor. La rentabilidad se expresa en % anual; la aportación invertida es un traspaso a inversión y no aumenta el total por sí sola.</p>
           <div class="balance-config-controls">
             <label class="field-group" for="savingsProjectionYears">
-              Años de proyección
+              Horizonte (años)
               <input id="savingsProjectionYears" type="number" min="1" max="50" step="1" value="5" />
             </label>
-            <label class="field-group" for="savingsForecastMonths">
-              Meses de histórico para el forecast
-              <input id="savingsForecastMonths" type="number" min="1" max="120" step="1" value="12" />
+          </div>
+          <div class="balance-config-controls">
+            <label class="field-group" for="forecastBaseMonthly">
+              Ahorro base mensual (€)
+              <input id="forecastBaseMonthly" type="number" step="any" />
+            </label>
+            <label class="field-group" for="forecastInvestedMonthly">
+              Aportación invertida mensual (€)
+              <input id="forecastInvestedMonthly" type="number" step="any" min="0" />
+            </label>
+            <label class="field-group" for="forecastExtraPays">
+              Pagas extra (mes:importe)
+              <input id="forecastExtraPays" type="text" placeholder="7:2500, 12:2500" />
             </label>
           </div>
+          <h3>Cuentas invertidas</h3>
+          <div id="forecastInvestedAccounts" class="savings-columns-config"></div>
+          <h3>Escenarios</h3>
+          <div class="table-wrap">
+            <table class="forecast-scenarios-table">
+              <thead>
+                <tr><th>Escenario</th><th>Variable enero (€)</th><th>Gasto extra mensual (€)</th><th>Rentabilidad anual (%)</th></tr>
+              </thead>
+              <tbody id="forecastScenarioRows"></tbody>
+            </table>
+          </div>
+          <button id="saveForecastParams" class="primary" type="button">Guardar parámetros</button>
           <p id="savingsProjectionConfigStatus" class="import-summary" role="status"></p>
         </details>
         <details class="panel balance-config-panel config-card">
           <summary class="config-card-summary"><h2>Columnas de ahorro</h2></summary>
-          <p class="muted">Elige qué saldos aparecen en la nueva gráfica y cuáles se pueden editar en el modal. Si ocultas una columna del modal, al guardar su valor se pondrá a 0.</p>
+          <p class="muted">Elige qué saldos aparecen en la nueva gráfica y cuáles se pueden editar en el modal. Al añadir un registro, los saldos ocultos se inicializan en 0; al editar, se conservan.</p>
           <h3>Mostrar en la gráfica</h3>
           <div id="savingsChartColumnsConfig" class="savings-columns-config"></div>
           <h3>Mostrar en el modal</h3>
@@ -770,6 +828,7 @@
               <label>Ahorro Mensual Previsto<input name="Ahorro Mensual Previsto" type="number" step="any" /></label>
               <label>Gasto Extra2<input name="Gasto Extra2" type="number" step="any" /></label>
               <label>Aportaciones Abuela<input name="Aportaciones Abuela" type="number" step="any" /></label>
+              <label>Variable trabajo<input name="Variable trabajo" type="number" step="any" /></label>
               <label>Considerado en gráfica?<input name="Considerado en grafica?" type="text" /></label>
               <label class="full-width">Comentarios<textarea name="Comentarios" rows="2"></textarea></label>
             </div>

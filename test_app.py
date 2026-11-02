@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from AppGastos import AHORRO_AMOUNT_COLUMNS, app, DB_PATH
+from forecast_ahorro import DEFAULT_PARAMS, build_forecast, compute_deviation, monthly_entries
 from importar_input import (
     collect_input_rows,
     import_files,
@@ -816,6 +817,104 @@ class GastosAppTests(unittest.TestCase):
             self.assertEqual(saved_row['Ahorro BBVA'], 125.5)
             self.assertEqual(saved_row['Trade Wallet'], 0)
             self.assertEqual(saved_row['Ahorro Bankinter'], 0)
+
+    def test_editing_savings_extra_preserves_hidden_balances(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'gastos.db'
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                'CREATE TABLE ahorro ("Mes" TEXT, '
+                + ', '.join(f'"{column}" REAL' for column in AHORRO_AMOUNT_COLUMNS)
+                + ', "Considerado en grafica?" TEXT, "Comentarios" TEXT)'
+            )
+            conn.execute(
+                'INSERT INTO ahorro ("Mes", "Ahorro BBVA", "Ahorro Bankinter", "Gasto Extra2") '
+                'VALUES (?, ?, ?, ?)',
+                ('01/10/2026', 100, 9876.54, 250),
+            )
+            conn.commit()
+            conn.close()
+
+            with patch('AppGastos.DB_PATH', db_path):
+                config_response = self.client.put(
+                    '/api/config/ahorro-proyeccion',
+                    json={'columnas_modal_ahorro': ['Ahorro BBVA']},
+                )
+                self.assertEqual(config_response.status_code, 200)
+                savings_response = self.client.get('/api/ahorro')
+                self.assertEqual(savings_response.status_code, 200)
+                record = savings_response.get_json()['rows'][0]
+                save_response = self.client.post(
+                    '/api/ahorro',
+                    json={
+                        'rowid': record['rowid'],
+                        'Gasto Extra2': 12500,
+                        'Ahorro Bankinter': 0,
+                    },
+                )
+                updated_response = self.client.get('/api/ahorro')
+
+            self.assertEqual(save_response.status_code, 200)
+            updated_record = updated_response.get_json()['rows'][0]
+            self.assertEqual(updated_record['Gasto Extra2'], 12500)
+            self.assertEqual(updated_record['Ahorro Bankinter'], 9876.54)
+            self.assertEqual(updated_record['Ahorro Total'], record['Ahorro Total'])
+
+    def test_savings_export_includes_all_record_fields(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'gastos.db'
+            conn = sqlite3.connect(db_path)
+            columns = [
+                'Mes',
+                *AHORRO_AMOUNT_COLUMNS,
+                'Considerado en grafica?',
+                'Comentarios',
+                'Campo adicional',
+            ]
+            conn.execute(
+                'CREATE TABLE ahorro ('
+                + ', '.join(f'"{column}" TEXT' for column in columns)
+                + ')'
+            )
+            values = {
+                column: 0
+                for column in AHORRO_AMOUNT_COLUMNS
+            }
+            values.update({
+                'Mes': '01/10/2026',
+                'Ahorro BBVA': 100.25,
+                'Ahorro Mensual Previsto': 25.75,
+                'Considerado en grafica?': 'Sí',
+                'Comentarios': 'Registro de prueba',
+                'Campo adicional': 'Dato completo',
+            })
+            conn.execute(
+                'INSERT INTO ahorro ('
+                + ', '.join(f'"{column}"' for column in columns)
+                + ') VALUES ('
+                + ', '.join('?' for _ in columns)
+                + ')',
+                [values[column] for column in columns],
+            )
+            conn.commit()
+            conn.close()
+
+            with patch('AppGastos.DB_PATH', db_path):
+                response = self.client.get('/api/ahorro/export')
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.mimetype, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+            self.assertEqual(response.headers['Content-Disposition'], 'attachment; filename=registros_ahorro.xlsx')
+            exported = pd.read_excel(BytesIO(response.data))
+            self.assertEqual(len(exported), 1)
+            self.assertTrue(set(columns).issubset(exported.columns))
+            self.assertIn('rowid', exported.columns)
+            self.assertIn('Ahorro Total', exported.columns)
+            self.assertIn('Ahorro Hipotético', exported.columns)
+            self.assertEqual(exported.loc[0, 'Campo adicional'], 'Dato completo')
+            self.assertEqual(exported.loc[0, 'Comentarios'], 'Registro de prueba')
+            self.assertEqual(exported.loc[0, 'Ahorro Total'], 100.25)
+            self.assertEqual(exported.loc[0, 'Ahorro Hipotético'], 100.25)
 
     def test_account_visibility_flags_are_independent_between_dashboard_and_balances(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1781,6 +1880,156 @@ class GastosAppTests(unittest.TestCase):
         self.assertEqual(money_to_cents('-1.234,56'), -123456)
         self.assertEqual(money_to_cents('€1,234.56'), 123456)
         self.assertEqual(money_to_cents('1,234.56'), 123456)
+
+
+class ForecastModelTests(unittest.TestCase):
+    PARAMS = json.loads(json.dumps(DEFAULT_PARAMS))
+
+    def entries(self):
+        return [
+            {'date': date(2026, 10, 5), 'rowid': 1, 'total': 40000.0, 'invested': 20000.0},
+            {'date': date(2026, 11, 1), 'rowid': 2, 'total': 1.0, 'invested': 1.0},
+            {'date': date(2026, 11, 2), 'rowid': 3, 'total': 45418.91, 'invested': 25418.91},
+        ]
+
+    def forecast(self, months):
+        return build_forecast(self.entries(), self.PARAMS, months)
+
+    def test_acceptance_values(self):
+        for months, expected in (
+            (36, {'peor': 56819, 'medio': 77004, 'mejor': 92860}),
+            (96, {'peor': 75819, 'medio': 134901, 'mejor': 183282}),
+        ):
+            forecast = self.forecast(months)
+            for name, value in expected.items():
+                self.assertAlmostEqual(forecast['scenarios'][name][-1], value, delta=1)
+
+    def test_worst_case_closed_form_and_months(self):
+        forecast = self.forecast(36)
+        self.assertEqual(forecast['months'][0], '2026-12')
+        self.assertAlmostEqual(
+            forecast['scenarios']['peor'][-1],
+            45418.91 + 36 * 300 + 6 * 2500 - 36 * 400,
+            places=2,
+        )
+
+    def test_variable_only_in_january_and_last_record_of_month(self):
+        forecast = self.forecast(14)
+        medio = forecast['scenarios']['medio']
+        self.assertEqual(forecast['base']['total'], 45418.91)
+        step = [medio[0]] + [medio[i] - medio[i - 1] for i in range(1, len(medio))]
+        january = forecast['months'].index('2027-01')
+        without_variable = [
+            value for index, value in enumerate(step) if forecast['months'][index][-2:] == '02'
+        ][0]
+        self.assertGreater(step[january] - without_variable, 2990)
+        self.assertLess(step[january] - without_variable, 3010)
+
+    def test_monthly_entries_skip_missing_months(self):
+        monthly = monthly_entries([
+            {'date': date(2026, 8, 1), 'rowid': 1, 'total': 1, 'invested': 0},
+            {'date': date(2026, 10, 1), 'rowid': 2, 'total': 2, 'invested': 0},
+        ])
+        self.assertEqual([entry['rowid'] for entry in monthly], [1, 2])
+
+    def test_deviation_status_and_aggregates(self):
+        snapshot = {
+            'fecha_congelacion': '2026-11-02',
+            'valores': {
+                'months': ['2026-12', '2027-01', '2027-02', '2027-03'],
+                'scenarios': {
+                    'peor': [100, 110, 120, 130],
+                    'medio': [200, 210, 220, 230],
+                    'mejor': [300, 310, 320, 330],
+                },
+            },
+        }
+        entries = [
+            {'date': date(2026, 11, 2), 'rowid': 1, 'total': 5, 'invested': 0},
+            {'date': date(2026, 12, 10), 'rowid': 2, 'total': 250, 'invested': 0},
+            {'date': date(2026, 12, 20), 'rowid': 3, 'total': 220, 'invested': 0},
+            {'date': date(2027, 2, 1), 'rowid': 4, 'total': 100, 'invested': 0},
+            {'date': date(2027, 3, 1), 'rowid': 5, 'total': 400, 'invested': 0},
+            {'date': date(2027, 6, 1), 'rowid': 6, 'total': 999, 'invested': 0},
+        ]
+        result = compute_deviation(entries, snapshot)
+        rows = result['rows']
+        self.assertEqual([row['mes'] for row in rows], ['2026-12', '2027-02', '2027-03'])
+        self.assertEqual([row['desviacion_eur'] for row in rows], [20, -120, 170])
+        self.assertAlmostEqual(rows[0]['desviacion_pct'], 0.1)
+        self.assertEqual(
+            [row['estado'] for row in rows],
+            ['dentro de la banda', 'por debajo del peor', 'por encima del mejor'],
+        )
+        self.assertEqual(rows[2]['media_movil_3m'], round((20 - 120 + 170) / 3, 2))
+        self.assertEqual(rows[2]['desviacion_acumulada'], 70)
+        self.assertIs(result['latest'], rows[2])
+
+
+class ForecastApiTests(unittest.TestCase):
+    def setUp(self):
+        self.client = app.test_client()
+
+    def test_freeze_is_not_recalculated_when_records_are_added(self):
+        class FixedDate(date):
+            @classmethod
+            def today(cls):
+                return cls(2026, 11, 2)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'gastos.db'
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                'CREATE TABLE ahorro ("Mes" TEXT, '
+                + ', '.join(f'"{column}" REAL' for column in AHORRO_AMOUNT_COLUMNS)
+                + ', "Considerado en grafica?" TEXT, "Comentarios" TEXT)'
+            )
+            conn.execute(
+                'INSERT INTO ahorro ("Mes", "Ahorro BBVA", "Trade Wallet") '
+                "VALUES ('02/11/2026', '1.800,00', 1000)"
+            )
+            conn.commit()
+            conn.close()
+
+            with patch('AppGastos.DB_PATH', db_path), patch('AppGastos.date', FixedDate):
+                before = self.client.get('/api/ahorro/prevision').get_json()
+                frozen = self.client.post('/api/ahorro/prevision/congelar')
+                self.client.post('/api/ahorro', json={
+                    'Mes': '2026-12-15', 'Ahorro BBVA': 5000, 'Trade Wallet': 1000,
+                })
+                after = self.client.get('/api/ahorro/prevision').get_json()
+
+        self.assertEqual(before['actual']['base']['total'], 2800)
+        self.assertEqual(before['actual']['base']['invested'], 1000)
+        self.assertEqual(frozen.status_code, 201)
+        self.assertEqual(
+            frozen.get_json()['valores'], after['foto_activa']['valores']
+        )
+        self.assertEqual(after['actual']['base']['total'], 6000)
+        self.assertEqual(len(after['fotos']), 1)
+        self.assertEqual(after['desviacion']['rows'][0]['mes'], '2026-12')
+
+    def test_params_validation_and_persistence(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'gastos.db'
+            conn = sqlite3.connect(db_path)
+            conn.execute(
+                'CREATE TABLE ahorro ("Mes" TEXT, '
+                + ', '.join(f'"{column}" REAL' for column in AHORRO_AMOUNT_COLUMNS)
+                + ', "Considerado en grafica?" TEXT, "Comentarios" TEXT)'
+            )
+            conn.close()
+            with patch('AppGastos.DB_PATH', db_path):
+                params = self.client.get('/api/ahorro/prevision').get_json()['parametros']
+                params['escenarios']['medio']['rentabilidad_anual_pct'] = 5
+                saved = self.client.put('/api/ahorro/prevision/parametros', json=params)
+                params['cuentas_invertidas'] = ['Desconocida']
+                invalid = self.client.put('/api/ahorro/prevision/parametros', json=params)
+                reloaded = self.client.get('/api/ahorro/prevision').get_json()['parametros']
+
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(reloaded['escenarios']['medio']['rentabilidad_anual_pct'], 5)
 
 
 if __name__ == '__main__':

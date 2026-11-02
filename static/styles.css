@@ -841,6 +841,36 @@ tbody tr:hover {
   min-width: 180px;
 }
 
+.savings-forecast-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: end;
+  margin-top: 12px;
+}
+
+.savings-forecast-controls .checkbox-label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.savings-deviation-section {
+  margin-top: 20px;
+}
+
+.savings-deviation-card {
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.savings-deviation-card.muted {
+  font-weight: normal;
+}
+
 .savings-columns-chart-section {
   margin-top: 28px;
   border-top: 1px solid var(--border);

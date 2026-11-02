@@ -13,6 +13,13 @@ import pandas as pd
 from flask import Flask, jsonify, render_template, request, send_file
 
 from importar_input import import_files, preview_import_files
+from forecast_ahorro import (
+    DEFAULT_PARAMS,
+    SCENARIOS,
+    build_forecast,
+    compute_deviation,
+    normalize_params,
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / 'gastos.db'
@@ -63,6 +70,7 @@ AHORRO_AMOUNT_COLUMNS = (
     'Ahorro Mensual Previsto',
     'Gasto Extra2',
     'Aportaciones Abuela',
+    'Variable trabajo',
 )
 AHORRO_TOTAL_COLUMNS = AHORRO_AMOUNT_COLUMNS[:11]
 AHORRO_BALANCE_COLUMNS = AHORRO_TOTAL_COLUMNS
@@ -351,7 +359,15 @@ def parse_ahorro_date(value):
     raise ValueError(f'Fecha de ahorro no válida: {text}')
 
 
+def ensure_ahorro_variable_column(conn: sqlite3.Connection) -> None:
+    columns = {row['name'] for row in conn.execute('PRAGMA table_info(ahorro)')}
+    if columns and 'Variable trabajo' not in columns:
+        conn.execute('ALTER TABLE ahorro ADD COLUMN "Variable trabajo" REAL')
+        conn.commit()
+
+
 def get_ahorro_records(conn: sqlite3.Connection) -> list[dict]:
+    ensure_ahorro_variable_column(conn)
     columns = [row['name'] for row in conn.execute('PRAGMA table_info(ahorro)')]
     required_columns = set(AHORRO_AMOUNT_COLUMNS) | set(AHORRO_TEXT_COLUMNS)
     if not required_columns.issubset(columns):
@@ -394,6 +410,30 @@ def api_ahorro():
         conn.close()
 
 
+@app.get('/api/ahorro/export')
+def export_ahorro():
+    conn = get_db()
+    try:
+        columns = [row['name'] for row in conn.execute('PRAGMA table_info(ahorro)')]
+        records = get_ahorro_records(conn)
+    finally:
+        conn.close()
+
+    export_columns = [*columns, 'rowid', 'Ahorro Total', 'Ahorro Hipotético']
+    df = pd.DataFrame(records, columns=export_columns)
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='registros_ahorro')
+
+    output.seek(0)
+    return send_file(
+        output,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        as_attachment=True,
+        download_name='registros_ahorro.xlsx',
+    )
+
+
 @app.post('/api/ahorro')
 def save_ahorro():
     payload = request.get_json(silent=True)
@@ -402,12 +442,15 @@ def save_ahorro():
 
     conn = get_db()
     try:
+        ensure_ahorro_variable_column(conn)
         column_settings = get_savings_column_settings(conn)
         modal_columns = set(column_settings['columnas_modal_ahorro'])
         columns = {row['name'] for row in conn.execute('PRAGMA table_info(ahorro)')}
         if not columns:
             return jsonify({'error': 'No existe la tabla ahorro'}), 500
 
+        rowid = payload.get('rowid')
+        is_update = rowid is not None
         values = {}
         if 'Mes' in payload:
             try:
@@ -417,12 +460,14 @@ def save_ahorro():
 
         for column in AHORRO_AMOUNT_COLUMNS:
             if column in payload:
+                if is_update and column in AHORRO_BALANCE_COLUMNS and column not in modal_columns:
+                    continue
                 try:
                     values[column] = parse_ahorro_amount(payload[column])
                 except ValueError:
                     return jsonify({'error': f'El valor de «{column}» debe ser numérico'}), 400
         for column in AHORRO_BALANCE_COLUMNS:
-            if column not in modal_columns:
+            if not is_update and column not in modal_columns:
                 values[column] = 0
 
         for column in ('Considerado en grafica?', 'Comentarios'):
@@ -430,7 +475,6 @@ def save_ahorro():
                 value = payload[column]
                 values[column] = str(value).strip() if value not in (None, '') else None
 
-        rowid = payload.get('rowid')
         if rowid is not None:
             try:
                 rowid = int(rowid)
@@ -463,6 +507,145 @@ def save_ahorro():
         conn.close()
 
 
+PREVISION_PARAMS_KEY = 'prevision_ahorro_params'
+
+
+def ensure_forecast_snapshot_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        '''
+        CREATE TABLE IF NOT EXISTS ahorro_previsiones_congeladas (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          fecha_congelacion TEXT NOT NULL,
+          parametros TEXT NOT NULL,
+          valores TEXT NOT NULL
+        )
+        '''
+    )
+
+
+def get_forecast_params(conn: sqlite3.Connection) -> dict:
+    ensure_app_settings(conn)
+    row = conn.execute(
+        'SELECT valor FROM app_config WHERE clave = ?', (PREVISION_PARAMS_KEY,)
+    ).fetchone()
+    params = DEFAULT_PARAMS
+    if row:
+        try:
+            params = normalize_params(json.loads(row['valor']), AHORRO_BALANCE_COLUMNS)
+        except (ValueError, KeyError, TypeError):
+            params = DEFAULT_PARAMS
+    years_row = conn.execute(
+        'SELECT valor FROM app_config WHERE clave = ?', ('anios_proyeccion_ahorro',)
+    ).fetchone()
+    try:
+        years = min(50, max(1, int(years_row['valor'])))
+    except (TypeError, ValueError):
+        years = 5
+    return {**json.loads(json.dumps(params)), 'horizonte_anios': years}
+
+
+def get_ahorro_entries(conn: sqlite3.Connection, invested_columns: list[str]) -> list[dict]:
+    return [
+        {
+            'date': parse_ahorro_date(record['Mes']),
+            'rowid': record['rowid'],
+            'total': record['Ahorro Total'],
+            'invested': sum(parse_ahorro_amount(record[column]) or 0 for column in invested_columns),
+        }
+        for record in get_ahorro_records(conn)
+    ]
+
+
+def serialize_snapshot(row: sqlite3.Row, with_values: bool = True) -> dict:
+    snapshot = {
+        'id': row['id'],
+        'fecha_congelacion': row['fecha_congelacion'],
+        'parametros': json.loads(row['parametros']),
+    }
+    if with_values:
+        snapshot['valores'] = json.loads(row['valores'])
+    return snapshot
+
+
+@app.get('/api/ahorro/prevision')
+def api_ahorro_prevision():
+    conn = get_db()
+    try:
+        params = get_forecast_params(conn)
+        entries = get_ahorro_entries(conn, params['cuentas_invertidas'])
+        ensure_forecast_snapshot_table(conn)
+        rows = conn.execute(
+            'SELECT * FROM ahorro_previsiones_congeladas ORDER BY id DESC'
+        ).fetchall()
+        selected = None
+        requested_id = request.args.get('snapshot_id', type=int)
+        for row in rows:
+            if requested_id is None or row['id'] == requested_id:
+                selected = serialize_snapshot(row)
+                break
+        return jsonify({
+            'parametros': params,
+            'escenarios': list(SCENARIOS),
+            'actual': build_forecast(entries, params, params['horizonte_anios'] * 12),
+            'fotos': [serialize_snapshot(row, with_values=False) for row in rows],
+            'foto_activa': selected,
+            'desviacion': compute_deviation(entries, selected) if selected else None,
+        })
+    finally:
+        conn.close()
+
+
+@app.put('/api/ahorro/prevision/parametros')
+def api_update_ahorro_prevision_params():
+    payload = request.get_json(silent=True)
+    try:
+        params = normalize_params(payload, AHORRO_BALANCE_COLUMNS)
+    except (ValueError, KeyError, TypeError) as exc:
+        message = str(exc) if isinstance(exc, ValueError) else 'Faltan parámetros de previsión'
+        return jsonify({'error': message}), 400
+
+    conn = get_db()
+    try:
+        ensure_app_settings(conn)
+        conn.execute(
+            'INSERT INTO app_config (clave, valor) VALUES (?, ?) '
+            'ON CONFLICT(clave) DO UPDATE SET valor = excluded.valor',
+            (PREVISION_PARAMS_KEY, json.dumps(params, ensure_ascii=False)),
+        )
+        conn.commit()
+        return jsonify(get_forecast_params(conn))
+    finally:
+        conn.close()
+
+
+@app.post('/api/ahorro/prevision/congelar')
+def api_freeze_ahorro_prevision():
+    conn = get_db()
+    try:
+        params = get_forecast_params(conn)
+        entries = get_ahorro_entries(conn, params['cuentas_invertidas'])
+        forecast = build_forecast(entries, params, params['horizonte_anios'] * 12)
+        if forecast is None:
+            return jsonify({'error': 'No hay registros de ahorro para congelar la previsión'}), 400
+        ensure_forecast_snapshot_table(conn)
+        cursor = conn.execute(
+            'INSERT INTO ahorro_previsiones_congeladas (fecha_congelacion, parametros, valores) '
+            'VALUES (?, ?, ?)',
+            (
+                date.today().isoformat(),
+                json.dumps(params, ensure_ascii=False),
+                json.dumps(forecast, ensure_ascii=False),
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            'SELECT * FROM ahorro_previsiones_congeladas WHERE id = ?', (cursor.lastrowid,)
+        ).fetchone()
+        return jsonify(serialize_snapshot(row)), 201
+    finally:
+        conn.close()
+
+
 @app.get('/api/config/ahorro-proyeccion')
 def api_config_ahorro_proyeccion():
     conn = get_db()
@@ -473,7 +656,6 @@ def api_config_ahorro_proyeccion():
             'INSERT OR IGNORE INTO app_config (clave, valor) VALUES (?, ?)',
             (
                 ('anios_proyeccion_ahorro', '5'),
-                ('meses_media_forecast_ahorro', '12'),
                 ('fecha_inicio_evolucion_ahorro', ''),
                 ('fecha_fin_evolucion_ahorro', ''),
             ),
@@ -482,10 +664,9 @@ def api_config_ahorro_proyeccion():
         settings = {
             row['clave']: row['valor']
             for row in conn.execute(
-                'SELECT clave, valor FROM app_config WHERE clave IN (?, ?, ?, ?)',
+                'SELECT clave, valor FROM app_config WHERE clave IN (?, ?, ?)',
                 (
                     'anios_proyeccion_ahorro',
-                    'meses_media_forecast_ahorro',
                     'fecha_inicio_evolucion_ahorro',
                     'fecha_fin_evolucion_ahorro',
                 ),
@@ -495,10 +676,6 @@ def api_config_ahorro_proyeccion():
             years = min(50, max(1, int(settings['anios_proyeccion_ahorro'])))
         except (TypeError, ValueError):
             years = 5
-        try:
-            months = min(120, max(1, int(settings['meses_media_forecast_ahorro'])))
-        except (TypeError, ValueError):
-            months = 12
         start_date = settings['fecha_inicio_evolucion_ahorro']
         try:
             if start_date:
@@ -513,7 +690,6 @@ def api_config_ahorro_proyeccion():
             end_date = ''
         return jsonify({
             'anios_proyeccion_ahorro': years,
-            'meses_media_forecast_ahorro': months,
             'fecha_inicio_evolucion_ahorro': start_date,
             'fecha_fin_evolucion_ahorro': end_date,
             **column_settings,
@@ -529,7 +705,6 @@ def api_update_config_ahorro_proyeccion():
         return jsonify({'error': 'El cuerpo de la petición debe ser un objeto JSON'}), 400
     supported_settings = {
         'anios_proyeccion_ahorro': (1, 50, 'años'),
-        'meses_media_forecast_ahorro': (1, 120, 'meses'),
     }
     supported_column_settings = {
         'columnas_grafica_ahorro',
