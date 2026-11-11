@@ -9,7 +9,7 @@
       if (savedTheme === 'dark') document.documentElement.dataset.theme = 'dark';
     </script>
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20261031-07" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}?v=20261111-01" />
   </head>
   <body>
     <div class="container">
@@ -157,7 +157,11 @@
           <div class="dashboard-range panel-soft">
             <div class="date-range-header">
               <span>Rango de fechas</span>
-              <span id="dashboardDateLabel" class="date-range-label">—</span>
+              <div class="date-range-navigation">
+                <button id="dashboardPreviousMonth" type="button" class="date-range-month-button" aria-label="Mes anterior" title="Mes anterior">&lt;</button>
+                <span id="dashboardDateLabel" class="date-range-label">—</span>
+                <button id="dashboardNextMonth" type="button" class="date-range-month-button" aria-label="Mes siguiente" title="Mes siguiente">&gt;</button>
+              </div>
             </div>
             <div class="date-range-shortcuts" aria-label="Accesos rápidos de fecha">
               <button id="clearDashboardDateFilter" type="button" class="range-shortcut" data-range="all">Todas las fechas</button>
@@ -886,6 +890,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="{{ url_for('static', filename='app.js') }}?v=20261031-07"></script>
+    <script src="{{ url_for('static', filename='app.js') }}?v=20261111-01"></script>
   </body>
 </html>

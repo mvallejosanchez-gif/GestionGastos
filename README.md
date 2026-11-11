@@ -4,7 +4,7 @@ Aplicación web local para consultar y gestionar movimientos financieros almacen
 
 ## Funcionalidades
 
-- **Resumen:** consulta de gastos por fuente y por niveles de categoría, con filtros por fecha.
+- **Resumen:** consulta de gastos por fuente y por niveles de categoría, con filtros por fecha y botones para navegar entre meses completos a partir de la fecha inicial seleccionada.
 - **Saldos:** visualización del histórico de saldos y ajuste del periodo histórico y de los parámetros de cada cuenta. EFECTIVO se reconstruye desde un saldo inicial de 0,00 € anterior a su primer movimiento, ignorando los snapshots guardados. AMAZON también se configura para acumular los importes de sus movimientos e ignorar snapshots, de modo que su saldo cambia según la fecha seleccionada.
 - **Movimientos:** listado con scroll y cabecera fija, búsqueda global en todos los campos y registros, filtros por fuente, categoría, fechas e importe (un único importe mínimo busca ese importe exacto; con ambos extremos se filtra por rango). La ordenación de las columnas se aplica a todos los resultados antes de paginar y también se conserva al exportar. Permite crear, editar, duplicar y eliminar movimientos, cambiar categorías y exportar los resultados a Excel.
 - **Evolución ahorro:** pestaña integrada en la aplicación para consultar las gráficas de ahorro total con tres escenarios de previsión (peor, medio, mejor) congelables y su desviación, además de la evolución mensual apilada de cada columna de saldo seleccionada. Un único rango de fechas filtra las dos gráficas y se conserva entre sesiones. Permite añadir y editar registros de la tabla `ahorro` desde un modal.

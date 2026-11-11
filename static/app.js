@@ -174,6 +174,8 @@ const dashboardCategoryViews = {
   },
 };
 const dashboardDateLabel = document.getElementById('dashboardDateLabel');
+const dashboardPreviousMonth = document.getElementById('dashboardPreviousMonth');
+const dashboardNextMonth = document.getElementById('dashboardNextMonth');
 const dateStartSlider = document.getElementById('dateStartSlider');
 const dateEndSlider = document.getElementById('dateEndSlider');
 const clearDashboardDateFilter = document.getElementById('clearDashboardDateFilter');
@@ -227,6 +229,8 @@ const tableSortStates = new WeakMap();
 let dashboardRange = {
   min: null,
   max: null,
+  sliderMin: null,
+  sliderMax: null,
   start: null,
   end: null,
 };
@@ -489,9 +493,7 @@ function resetDashboardDateRange() {
   activeRangePreset = 'all';
   setRangeShortcutState();
   if (!dashboardRange.min || !dashboardRange.max) return;
-  dateStartSlider.value = '0';
-  dateEndSlider.value = String(Math.max(1, daysBetween(dashboardRange.min, dashboardRange.max)));
-  syncDashboardDateInputs();
+  setDashboardDateRange(new Date(dashboardRange.min), new Date(dashboardRange.max));
 }
 
 function applyRangePreset(preset) {
@@ -518,20 +520,37 @@ function applyRangePreset(preset) {
 
   activeRangePreset = preset;
   setRangeShortcutState();
+  setDashboardDateRange(startDate, endDate);
+  loadDashboard();
+}
 
-  const totalDays = Math.max(1, daysBetween(dashboardRange.min, dashboardRange.max));
-  const startIndex = Math.min(totalDays, Math.max(0, daysBetween(dashboardRange.min, startDate)));
-  const endIndex = Math.min(totalDays, Math.max(0, daysBetween(dashboardRange.min, endDate)));
-
-  dateStartSlider.value = String(startIndex);
-  dateEndSlider.value = String(endIndex);
+function setDashboardDateRange(startDate, endDate) {
   dashboardRange.start = startDate;
   dashboardRange.end = endDate;
+  dashboardRange.sliderMin = new Date(Math.min(dashboardRange.min.getTime(), startDate.getTime()));
+  dashboardRange.sliderMax = new Date(Math.max(dashboardRange.max.getTime(), endDate.getTime()));
+
+  const totalDays = Math.max(1, daysBetween(dashboardRange.sliderMin, dashboardRange.sliderMax));
+  dateStartSlider.min = '0';
+  dateStartSlider.max = String(totalDays);
+  dateEndSlider.min = '0';
+  dateEndSlider.max = String(totalDays);
+  dateStartSlider.value = String(daysBetween(dashboardRange.sliderMin, startDate));
+  dateEndSlider.value = String(daysBetween(dashboardRange.sliderMin, endDate));
 
   dateRangeStartText.textContent = formatDateValue(toDateValue(dashboardRange.start));
   dateRangeEndText.textContent = formatDateValue(toDateValue(dashboardRange.end));
   dashboardDateLabel.textContent = `${dateRangeStartText.textContent} - ${dateRangeEndText.textContent}`;
   updateRangeSliderVisual();
+}
+
+function navigateDashboardMonth(offset) {
+  if (!dashboardRange.start || !dashboardRange.min || !dashboardRange.max) return;
+  const year = dashboardRange.start.getFullYear();
+  const month = dashboardRange.start.getMonth() + offset;
+  activeRangePreset = null;
+  setRangeShortcutState();
+  setDashboardDateRange(new Date(year, month, 1), new Date(year, month + 1, 0));
   loadDashboard();
 }
 
@@ -558,27 +577,10 @@ function updateDashboardDateRange(data) {
 
   const selectedStart = data.date_start || min;
   const selectedEnd = data.date_end || max;
-  dashboardRange.start = new Date(`${selectedStart}T00:00:00`);
-  dashboardRange.end = new Date(`${selectedEnd}T00:00:00`);
-
-  if (dashboardRange.start < dashboardRange.min) dashboardRange.start = new Date(dashboardRange.min);
-  if (dashboardRange.end > dashboardRange.max) dashboardRange.end = new Date(dashboardRange.max);
-
-  const totalDays = Math.max(1, daysBetween(dashboardRange.min, dashboardRange.max));
-  const startIndex = Math.min(totalDays, Math.max(0, daysBetween(dashboardRange.min, dashboardRange.start)));
-  const endIndex = Math.min(totalDays, Math.max(0, daysBetween(dashboardRange.min, dashboardRange.end)));
-
-  dateStartSlider.min = '0';
-  dateStartSlider.max = String(totalDays);
-  dateEndSlider.min = '0';
-  dateEndSlider.max = String(totalDays);
-  dateStartSlider.value = String(startIndex);
-  dateEndSlider.value = String(endIndex);
-
-  dateRangeStartText.textContent = formatDateValue(toDateValue(dashboardRange.start));
-  dateRangeEndText.textContent = formatDateValue(toDateValue(dashboardRange.end));
-  dashboardDateLabel.textContent = `${dateRangeStartText.textContent} - ${dateRangeEndText.textContent}`;
-  updateRangeSliderVisual();
+  setDashboardDateRange(
+    new Date(`${selectedStart}T00:00:00`),
+    new Date(`${selectedEnd}T00:00:00`),
+  );
 }
 
 function createDashboardCategoryButton(level, value, label, className = '') {
@@ -1445,9 +1447,9 @@ function syncDashboardDateInputs() {
 
   const startValue = Number(dateStartSlider.value);
   const endValue = Number(dateEndSlider.value);
-  const startDate = new Date(dashboardRange.min);
+  const startDate = new Date(dashboardRange.sliderMin);
   startDate.setDate(startDate.getDate() + startValue);
-  const endDate = new Date(dashboardRange.min);
+  const endDate = new Date(dashboardRange.sliderMin);
   endDate.setDate(endDate.getDate() + endValue);
 
   if (startDate > endDate) {
@@ -1458,9 +1460,9 @@ function syncDashboardDateInputs() {
     }
   }
 
-  const effectiveStart = new Date(dashboardRange.min);
+  const effectiveStart = new Date(dashboardRange.sliderMin);
   effectiveStart.setDate(effectiveStart.getDate() + Number(dateStartSlider.value));
-  const effectiveEnd = new Date(dashboardRange.min);
+  const effectiveEnd = new Date(dashboardRange.sliderMin);
   effectiveEnd.setDate(effectiveEnd.getDate() + Number(dateEndSlider.value));
 
   dashboardRange.start = effectiveStart;
@@ -1477,6 +1479,9 @@ function scheduleDashboardLoad() {
   window.clearTimeout(dashboardRangeLoadTimeout);
   dashboardRangeLoadTimeout = window.setTimeout(() => loadDashboard(), 150);
 }
+
+dashboardPreviousMonth.addEventListener('click', () => navigateDashboardMonth(-1));
+dashboardNextMonth.addEventListener('click', () => navigateDashboardMonth(1));
 
 dateStartSlider.addEventListener('input', () => {
   activeRangePreset = null;
