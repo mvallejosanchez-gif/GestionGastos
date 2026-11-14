@@ -302,6 +302,11 @@
               <p class="muted">Tres escenarios (peor, medio, mejor) calculados a partir del último ahorro real. Congela la previsión para medir desviaciones.</p>
             </div>
           </div>
+          <div class="savings-cards-section">
+            <h3>Saldos del último registro</h3>
+            <p id="savingsCardsDate" class="muted"></p>
+            <div id="savingsCards" class="bank-cards-grid"></div>
+          </div>
           <div class="savings-date-range" aria-label="Rango de fechas para las gráficas de ahorro">
             <label class="field-group" for="savingsStartDate">
               Desde
@@ -610,7 +615,7 @@
         </details>
         <details class="panel balance-config-panel config-card">
           <summary class="config-card-summary"><h2>Columnas de ahorro</h2></summary>
-          <p class="muted">Elige qué saldos aparecen en la nueva gráfica y cuáles se pueden editar en el modal. Al añadir un registro, los saldos ocultos se inicializan en 0; al editar, se conservan.</p>
+          <p class="muted">Elige qué saldos aparecen en la gráfica y en las tarjetas de ahorro, y cuáles se pueden editar en el modal. Al añadir un registro, los saldos ocultos se inicializan en 0; al editar, se conservan.</p>
           <h3>Mostrar en la gráfica</h3>
           <div id="savingsChartColumnsConfig" class="savings-columns-config"></div>
           <h3>Mostrar en el modal</h3>

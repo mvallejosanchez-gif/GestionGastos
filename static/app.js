@@ -96,6 +96,8 @@ const budgetConfigYearInput = document.getElementById('budgetConfigYear');
 const budgetMovementCache = new Map();
 const savingsRows = document.getElementById('savingsRows');
 const savingsTableHeader = document.getElementById('savingsTableHeader');
+const savingsCards = document.getElementById('savingsCards');
+const savingsCardsDate = document.getElementById('savingsCardsDate');
 const savingsChartCanvas = document.getElementById('savingsChart');
 const savingsColumnsChartCanvas = document.getElementById('savingsColumnsChart');
 const savingsColumnToggles = document.getElementById('savingsColumnToggles');
@@ -2971,6 +2973,28 @@ function renderSavingsRows() {
   applyDefaultTableSort(savingsRows);
 }
 
+function renderSavingsCards() {
+  const record = savingsRecords[savingsRecords.length - 1];
+  savingsCards.replaceChildren();
+  savingsCardsDate.textContent = record
+    ? `Fecha: ${record.Mes}`
+    : 'No hay registros de ahorro.';
+  if (!record) return;
+
+  ['Ahorro Total', ...savedSavingsChartColumns].forEach((column) => {
+    const card = document.createElement('div');
+    card.className = 'bank-card';
+    const title = document.createElement('div');
+    title.className = 'bank-card-title';
+    title.textContent = column;
+    const amount = document.createElement('div');
+    amount.className = 'bank-card-amount';
+    amount.textContent = formatSavingsAmount(record[column]);
+    card.append(title, amount);
+    savingsCards.appendChild(card);
+  });
+}
+
 async function loadSavings() {
   savingsStatus.textContent = 'Cargando registros...';
   try {
@@ -2986,6 +3010,7 @@ async function loadSavings() {
     savingsStartDateInput.value = savedSavingsStartDate;
     savingsEndDateInput.value = savedSavingsEndDate;
     savingsRecords = data.rows;
+    renderSavingsCards();
     await fetchSavingsForecast();
     renderSavingsRows();
     renderSavingsChart();
@@ -3154,6 +3179,7 @@ async function saveSavingsColumnSettings() {
       }),
     });
     applySavingsColumnSettings(result);
+    renderSavingsCards();
     renderSavingsRows();
     renderSavingsColumnsChart();
     savingsColumnsConfigStatus.textContent = 'Columnas de ahorro actualizadas.';

@@ -1048,16 +1048,33 @@ tbody tr:hover {
   border: 2px solid var(--border);
   border-radius: 10px;
   background: var(--panel);
-  cursor: pointer;
   transition: all 0.2s ease;
   text-decoration: none;
   color: inherit;
 }
 
-.bank-card:hover {
+button.bank-card:hover {
   border-color: var(--primary);
   background: var(--panel-alt);
   transform: translateY(-2px);
+}
+
+.savings-cards-section {
+  margin-bottom: 20px;
+}
+
+.savings-cards-section h3 {
+  margin: 0 0 4px;
+}
+
+.savings-cards-section p {
+  margin: 0 0 12px;
+}
+
+.savings-cards-section .bank-card-title,
+.savings-cards-section .bank-card-amount {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .bank-card.active {
@@ -1964,7 +1981,7 @@ tbody tr:hover {
   border-color: var(--border);
 }
 
-:root[data-theme="dark"] .bank-card:hover {
+:root[data-theme="dark"] button.bank-card:hover {
   border-color: var(--primary);
   background: var(--surface-hover);
 }
