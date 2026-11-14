@@ -135,22 +135,23 @@
       <section id="dashboardView" class="view active">
         <div class="panel dashboard-panel">
           <div class="dashboard-header">
-            <div class="dashboard-filter">
-              <span class="label-inline">Bancos</span>
-              <div id="dashboardBankButtons" class="bank-toggle-group"></div>
-            </div>
-            <div class="dashboard-summary-cards">
-              <div class="summary-card dashboard-total-card">
-                <div class="dashboard-total-item">
-                  <span class="label">Total general</span>
-                  <span id="dashboardTotal" class="value">0,00 €</span>
+            <div class="dashboard-kpi-column">
+              <div class="summary-card dashboard-kpi-card">
+                <div class="kpi-item kpi-main">
+                  <span class="kpi-label">Liquidez disponible</span>
+                  <span id="dashboardTotal" class="kpi-value">0,00 €</span>
                 </div>
-                <div class="dashboard-total-item">
-                  <span class="label">Total incluyendo saldo excluido</span>
-                  <span id="dashboardTotalIncludingExcluded" class="value">0,00 €</span>
+                <div class="kpi-separator"></div>
+                <div class="kpi-item kpi-secondary">
+                  <span class="kpi-label">Patrimonio total (con excluido)</span>
+                  <span id="dashboardTotalIncludingExcluded" class="kpi-value">0,00 €</span>
+                  <span id="dashboardExcludedDiff" class="kpi-subtitle">0,00 € excluidos</span>
                 </div>
               </div>
-              <div id="dashboardBankTotals" class="summary-card dashboard-bank-totals" aria-label="Total por banco"></div>
+            </div>
+
+            <div class="dashboard-banks-column">
+              <div id="dashboardBankCards" class="bank-cards-grid"></div>
             </div>
           </div>
 

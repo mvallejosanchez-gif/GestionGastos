@@ -142,10 +142,10 @@ const importBankFilter = document.getElementById('importBankFilter');
 const importSearchInput = document.getElementById('importSearchInput');
 const importSelectAll = document.getElementById('importSelectAll');
 const confirmImportTabBtn = document.getElementById('confirmImportTabBtn');
-const dashboardBankButtons = document.getElementById('dashboardBankButtons');
+const dashboardBankCards = document.getElementById('dashboardBankCards');
 const dashboardTotal = document.getElementById('dashboardTotal');
 const dashboardTotalIncludingExcluded = document.getElementById('dashboardTotalIncludingExcluded');
-const dashboardBankTotals = document.getElementById('dashboardBankTotals');
+const dashboardExcludedDiff = document.getElementById('dashboardExcludedDiff');
 const balanceHistoryChart = document.getElementById('balanceHistoryChart');
 const balanceChartWrap = document.getElementById('balanceChartWrap');
 const balanceChartTooltip = document.getElementById('balanceChartTooltip');
@@ -655,45 +655,23 @@ function renderDashboardCategory(level, rows) {
   });
 }
 
-function renderDashboard(data) {
+function renderDashboard(data, bankTotals) {
   dashboardTotal.textContent = formatMoneyFromCents(data.total_general || 0);
   dashboardTotalIncludingExcluded.textContent = formatMoneyFromCents(
     data.total_general_con_excluido || 0,
   );
-  dashboardBankTotals.replaceChildren();
-  const bankTotals = data.totales_por_fuente || [];
-  if (bankTotals.length) {
-    const header = document.createElement('div');
-    header.className = 'dashboard-bank-total dashboard-bank-total-header';
-    const bankHeading = document.createElement('span');
-    bankHeading.textContent = 'Banco';
-    const availableHeading = document.createElement('span');
-    availableHeading.textContent = 'Disponible';
-    const includingExcludedHeading = document.createElement('span');
-    includingExcludedHeading.textContent = 'Con excluido';
-    header.append(bankHeading, availableHeading, includingExcludedHeading);
-    dashboardBankTotals.appendChild(header);
+
+  const totalGeneral = data.total_general || 0;
+  const totalConExcluido = data.total_general_con_excluido || 0;
+  const difference = totalConExcluido - totalGeneral;
+  if (difference > 0) {
+    dashboardExcludedDiff.textContent = `${formatMoneyFromCents(difference)} excluidos`;
+  } else {
+    dashboardExcludedDiff.textContent = '';
   }
-  bankTotals.forEach((bankTotal) => {
-    const row = document.createElement('div');
-    row.className = 'dashboard-bank-total';
-    const bank = document.createElement('span');
-    bank.textContent = bankTotal.fuente;
-    const availableAmount = document.createElement('strong');
-    availableAmount.textContent = formatMoneyFromCents(bankTotal.total_cent);
-    const amountIncludingExcluded = document.createElement('strong');
-    amountIncludingExcluded.textContent = formatMoneyFromCents(
-      bankTotal.total_con_excluido_cent,
-    );
-    row.append(bank, availableAmount, amountIncludingExcluded);
-    dashboardBankTotals.appendChild(row);
-  });
-  if (!bankTotals.length) {
-    const empty = document.createElement('span');
-    empty.className = 'muted';
-    empty.textContent = 'Sin bancos seleccionados';
-    dashboardBankTotals.appendChild(empty);
-  }
+
+  renderBankCards(bankTotals);
+
   updateDashboardDateRange(data);
   dashboardCategoryLevels.forEach((level) => {
     dashboardCategoryVisuals.querySelector(`[data-clear-category-level="${level}"]`).disabled = !selectedDashboardCategories[level];
@@ -1389,56 +1367,105 @@ async function loadOptions() {
     categoriaFilter.value = state.categoria;
   }
 
-  renderBankButtons(data.fuentes);
 }
 
-function renderBankButtons(fuentes) {
-  if (!Array.isArray(fuentes) || !fuentes.length) {
-    dashboardBankButtons.innerHTML = '<span class="muted">Sin bancos</span>';
+function capitalize(str) {
+  if (!str) return '';
+  return str.split(' ').map((word) => (
+    word.toUpperCase() === 'BBVA'
+      ? 'BBVA'
+      : word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+  )).join(' ');
+}
+
+function renderBankCards(bankTotals) {
+  if (!dashboardBankCards) return;
+
+  dashboardBankCards.replaceChildren();
+
+  if (!Array.isArray(bankTotals) || !bankTotals.length) {
+    const empty = document.createElement('div');
+    empty.className = 'muted';
+    empty.textContent = 'Sin bancos para mostrar';
+    dashboardBankCards.appendChild(empty);
     return;
   }
 
+  const bankOrder = ['BBVA', 'BANKINTER', 'EFECTIVO', 'TRADE REPUBLIC', 'REVOLUT', 'AMAZON', 'PIBANK'];
+  const sortedBankTotals = [...bankTotals].sort((a, b) => {
+    const indexA = bankOrder.indexOf(a.fuente.trim().toUpperCase());
+    const indexB = bankOrder.indexOf(b.fuente.trim().toUpperCase());
+    return (indexA === -1 ? bankOrder.length : indexA)
+      - (indexB === -1 ? bankOrder.length : indexB)
+      || a.fuente.localeCompare(b.fuente, 'es', { sensitivity: 'base' });
+  });
   const allBanksSelected = selectedBanks === null
-    || fuentes.every((bank) => selectedBanks.includes(bank));
-  dashboardBankButtons.innerHTML = `
-    <button type="button" class="bank-toggle all-banks-toggle ${allBanksSelected ? 'active' : ''}" aria-pressed="${allBanksSelected}">
-      Todos los bancos
-    </button>
-  ` + fuentes
-    .map(
-      (bank) => `
-        <button
-          type="button"
-          class="bank-toggle ${selectedBanks === null || selectedBanks.includes(bank) ? 'active' : ''}"
-          data-bank="${bank}"
-          aria-pressed="${selectedBanks === null || selectedBanks.includes(bank)}"
-        >
-          ${bank}
-        </button>
-      `
-    )
-    .join('');
+    || bankTotals.every((bank) => selectedBanks.includes(bank.fuente));
 
-  dashboardBankButtons.querySelector('.all-banks-toggle').addEventListener('click', () => {
+  // Crear tarjeta "Todos los bancos"
+  const allBanksCard = document.createElement('button');
+  allBanksCard.type = 'button';
+  allBanksCard.className = `bank-card ${allBanksSelected ? 'active' : ''}`;
+  allBanksCard.setAttribute('aria-pressed', String(allBanksSelected));
+  allBanksCard.innerHTML = `
+    <div class="bank-card-title">Todos los bancos</div>
+    <div class="bank-card-amount">${bankTotals.length}</div>
+    <div class="bank-card-secondary">entidades</div>
+  `;
+  allBanksCard.addEventListener('click', () => {
     selectedBanks = allBanksSelected ? [] : null;
-    renderBankButtons(fuentes);
+    renderBankCards(bankTotals);
     loadDashboard();
     if (activeViewName === 'balances') loadBalanceHistoryChart();
   });
+  dashboardBankCards.appendChild(allBanksCard);
 
-  dashboardBankButtons.querySelectorAll('.bank-toggle[data-bank]').forEach((button) => {
-    button.addEventListener('click', () => {
-      const bank = button.dataset.bank;
-      if (selectedBanks === null) selectedBanks = [...fuentes];
+  // Crear tarjetas por banco
+  sortedBankTotals.forEach((bankTotal) => {
+    const bankName = bankTotal.fuente || '—';
+    const isSelected = selectedBanks === null || selectedBanks.includes(bankName);
+    const availableCents = bankTotal.total_cent || 0;
+    const conExcluidoCents = bankTotal.total_con_excluido_cent || 0;
+    const isZero = availableCents === 0;
+
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = `bank-card ${isSelected ? 'active' : ''}`;
+    card.dataset.bank = bankName;
+    card.setAttribute('aria-pressed', String(isSelected));
+
+    const title = document.createElement('div');
+    title.className = 'bank-card-title';
+    title.textContent = capitalize(bankName);
+
+    const amount = document.createElement('div');
+    amount.className = `bank-card-amount ${isZero ? 'zero' : ''}`;
+    amount.textContent = formatMoneyFromCents(availableCents);
+
+    const secondary = document.createElement('div');
+    secondary.className = 'bank-card-secondary';
+    if (conExcluidoCents !== availableCents) {
+      secondary.textContent = formatMoneyFromCents(conExcluidoCents);
+    } else {
+      secondary.textContent = '';
+    }
+
+    card.append(title, amount, secondary);
+
+    card.addEventListener('click', () => {
+      const bank = card.dataset.bank;
+      if (selectedBanks === null) selectedBanks = bankTotals.map((b) => b.fuente);
       if (!selectedBanks.includes(bank)) {
         selectedBanks.push(bank);
       } else {
         selectedBanks = selectedBanks.filter((item) => item !== bank);
       }
-      renderBankButtons(fuentes);
+      renderBankCards(bankTotals);
       loadDashboard();
       if (activeViewName === 'balances') loadBalanceHistoryChart();
     });
+
+    dashboardBankCards.appendChild(card);
   });
 }
 
@@ -1542,9 +1569,16 @@ function buildDashboardFilterParams() {
 async function loadDashboard() {
   const requestId = ++dashboardRequestId;
   const params = buildDashboardFilterParams();
-  const dashboardData = await fetchJson(`/api/dashboard?${params.toString()}`);
+  const cardsParams = new URLSearchParams(params);
+  cardsParams.delete('fuentes');
+  cardsParams.delete('sin_fuentes');
+  const dashboardRequest = fetchJson(`/api/dashboard?${params.toString()}`);
+  const cardsRequest = selectedBanks === null
+    ? dashboardRequest
+    : fetchJson(`/api/dashboard?${cardsParams.toString()}`);
+  const [dashboardData, cardsData] = await Promise.all([dashboardRequest, cardsRequest]);
   if (requestId !== dashboardRequestId) return;
-  renderDashboard(dashboardData);
+  renderDashboard(dashboardData, cardsData.totales_por_fuente || []);
   await loadDashboardMovements(true, params);
 }
 
