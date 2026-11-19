@@ -1616,7 +1616,7 @@ def api_dashboard():
             if date_end:
                 snapshot_sql += ' AND date(COALESCE(f_valor, fecha)) <= date(?)'
                 movements_params.append(date_end)
-            snapshot_sql += ' ORDER BY datetime(COALESCE(f_valor, fecha)) DESC, id ASC LIMIT 1'
+            snapshot_sql += ' ORDER BY datetime(COALESCE(f_valor, fecha)) DESC, id DESC LIMIT 1'
             snapshot = conn.execute(snapshot_sql, movements_params).fetchone()
 
             if snapshot is not None:

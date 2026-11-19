@@ -683,6 +683,42 @@ class GastosAppTests(unittest.TestCase):
                 },
             ])
 
+    def test_dashboard_uses_latest_same_day_balance_snapshot(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            db_path = Path(tmpdir) / 'gastos.db'
+            conn = sqlite3.connect(db_path)
+            schema_sql = Path(__file__).resolve().parent / 'schema.sql'
+            conn.executescript(schema_sql.read_text(encoding='utf-8'))
+            conn.execute(
+                "INSERT INTO cuentas (fuente, contabilidad2) VALUES ('BBVA', 'BANCO')"
+            )
+            conn.execute(
+                '''
+                INSERT INTO movimientos (
+                    fuente, f_valor, fecha, importe_cent, divisa,
+                    disponible_cent, categoria2, clave
+                ) VALUES ('BBVA', '2026-11-19', '2026-11-19', 0, 'EUR', ?, 'PENDIENTE', ?)
+                ''',
+                (10000, 'bbva-earlier-snapshot'),
+            )
+            conn.execute(
+                '''
+                INSERT INTO movimientos (
+                    fuente, f_valor, fecha, importe_cent, divisa,
+                    disponible_cent, categoria2, clave
+                ) VALUES ('BBVA', '2026-11-19', '2026-11-19', 0, 'EUR', ?, 'PENDIENTE', ?)
+                ''',
+                (12500, 'bbva-later-snapshot'),
+            )
+            conn.commit()
+            conn.close()
+
+            with patch('AppGastos.DB_PATH', db_path):
+                response = self.client.get('/api/dashboard?fuentes=BBVA&date_end=2026-11-19')
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()['total_general'], 12500)
+
     def test_account_balance_can_be_calculated_from_movements(self):
         class FixedDate(date):
             @classmethod
